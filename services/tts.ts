@@ -1,6 +1,6 @@
 import { httpsCallable } from 'firebase/functions';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { functions, db } from './firebase';
+import { functions, db, ensureAuth } from './firebase';
 import { Routine, ActivityKey, AudioCacheEntry } from '../types';
 import { ACTIVITIES } from '../constants/activities';
 import { buildAudioCacheKey } from './assetSync';
@@ -24,6 +24,7 @@ interface GenerateTTSResponse {
  * Called when a parent saves/updates a routine.
  */
 export async function ensureAudioForRoutine(routine: Routine): Promise<void> {
+  await ensureAuth();
   const generateTTS = httpsCallable<GenerateTTSRequest, GenerateTTSResponse>(
     functions,
     'generateRoutineAudio'

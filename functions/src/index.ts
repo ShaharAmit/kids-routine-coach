@@ -1,15 +1,15 @@
-import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
-import * as TextToSpeech from '@google-cloud/text-to-speech';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
+import { onCall, HttpsError, CallableRequest } from 'firebase-functions/v2/https';
+import { onDocumentDeleted } from 'firebase-functions/v2/firestore';
+import { TextToSpeechClient } from '@google-cloud/text-to-speech';
 
 admin.initializeApp();
 
-const ttsClient = new TextToSpeech.TextToSpeechClient();
+const ttsClient = new TextToSpeechClient();
 const db = admin.firestore();
-const storage = admin.storage();
 
 interface GenerateTTSRequest {
   cacheKey: string;
@@ -34,18 +34,17 @@ interface GenerateTTSResponse {
  * Input: { cacheKey, text, childName, activityKey, avatarId }
  * Output: { audioUrl, cacheKey }
  */
-export const generateRoutineAudio = functions
-  .runWith({ timeoutSeconds: 120, memory: '512MB' })
-  .https.onCall(async (data: GenerateTTSRequest, context): Promise<GenerateTTSResponse> => {
-    // Validate auth — only authenticated users may call this function
-    if (!context.auth) {
-      throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
+export const generateRoutineAudio = onCall(
+  { timeoutSeconds: 120, memory: '512MiB' },
+  async (request: CallableRequest<GenerateTTSRequest>): Promise<GenerateTTSResponse> => {
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'Authentication required.');
     }
 
-    const { cacheKey, text, childName, activityKey, avatarId } = data;
+    const { cacheKey, text, childName, activityKey, avatarId } = request.data;
 
     if (!cacheKey || !text || !childName || !activityKey || !avatarId) {
-      throw new functions.https.HttpsError(
+      throw new HttpsError(
         'invalid-argument',
         'Missing required fields: cacheKey, text, childName, activityKey, avatarId'
       );
@@ -53,7 +52,7 @@ export const generateRoutineAudio = functions
 
     // Sanitize text length to prevent abuse
     if (text.length > 500) {
-      throw new functions.https.HttpsError('invalid-argument', 'Text exceeds maximum length of 500 characters.');
+      throw new HttpsError('invalid-argument', 'Text exceeds maximum length of 500 characters.');
     }
 
     const cacheRef = db.collection('audio_cache').doc(cacheKey);
@@ -84,7 +83,7 @@ export const generateRoutineAudio = functions
       fs.writeFileSync(tmpFilePath, response.audioContent as Buffer);
 
       // Upload to Firebase Storage
-      const bucket = storage.bucket();
+      const bucket = admin.storage().bucket();
       const storagePath = `audio/${cacheKey}.mp3`;
 
       await bucket.upload(tmpFilePath, {
@@ -121,34 +120,31 @@ export const generateRoutineAudio = functions
         avatarId,
       });
 
-      functions.logger.info(`[generateRoutineAudio] Generated: ${cacheKey}`);
+      console.info(`[generateRoutineAudio] Generated: ${cacheKey}`);
 
       return { audioUrl, cacheKey };
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';
-      functions.logger.error(`[generateRoutineAudio] Error for ${cacheKey}:`, message);
+      console.error(`[generateRoutineAudio] Error for ${cacheKey}:`, message);
 
       // Mark as error in Firestore
       await cacheRef.set({ status: 'error', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
 
-      throw new functions.https.HttpsError('internal', `TTS generation failed: ${message}`);
+      throw new HttpsError('internal', `TTS generation failed: ${message}`);
     }
   });
 
-/**
- * Firestore trigger: Clean up Storage files when an audio_cache doc is deleted.
- */
-export const onAudioCacheDeleted = functions.firestore
-  .document('audio_cache/{cacheKey}')
-  .onDelete(async (snap) => {
-    const cacheKey = snap.id;
+export const onAudioCacheDeleted = onDocumentDeleted(
+  'audio_cache/{cacheKey}',
+  async (event) => {
+    const cacheKey = event.params.cacheKey;
     const storagePath = `audio/${cacheKey}.mp3`;
 
     try {
-      await storage.bucket().file(storagePath).delete();
-      functions.logger.info(`[onAudioCacheDeleted] Deleted storage file: ${storagePath}`);
+      await admin.storage().bucket().file(storagePath).delete();
+      console.info(`[onAudioCacheDeleted] Deleted storage file: ${storagePath}`);
     } catch (err) {
-      // File may not exist — log but don't throw
-      functions.logger.warn(`[onAudioCacheDeleted] Could not delete ${storagePath}:`, err);
+      console.warn(`[onAudioCacheDeleted] Could not delete ${storagePath}:`, err);
     }
-  });
+  }
+);

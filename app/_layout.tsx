@@ -2,11 +2,15 @@ import React, { useEffect, useCallback } from 'react';
 import { Stack, router } from 'expo-router';
 import * as Notifications from 'expo-notifications';
 import { requestNotificationPermissions } from '../services/notifications';
+import { ensureAuth } from '../services/firebase';
 
 export default function RootLayout() {
-  // Request permissions on first launch
+  // Sign in anonymously + request permissions on first launch
   useEffect(() => {
     requestNotificationPermissions();
+    ensureAuth().catch((err) =>
+      console.warn('[RootLayout] Anonymous sign-in failed:', err)
+    );
   }, []);
 
   // Handle notification tap when app is open or in background
