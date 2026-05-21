@@ -1,0 +1,17 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Routines — only the owning user can read/write their routines
+    match /routines/{routineId} {
+      allow read, write: if request.auth != null && request.auth.uid == resource.data.userId;
+      allow create: if request.auth != null && request.auth.uid == request.resource.data.userId;
+    }
+
+    // Audio cache — authenticated users can read; only Cloud Functions write
+    match /audio_cache/{cacheKey} {
+      allow read: if request.auth != null;
+      allow write: if false; // Written only by Cloud Functions (admin SDK)
+    }
+  }
+}

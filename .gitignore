@@ -2,6 +2,8 @@
 
 # dependencies
 node_modules/
+functions/node_modules/
+functions/lib/
 
 # Expo
 .expo/
@@ -28,6 +30,16 @@ yarn-error.*
 
 # macOS
 .DS_Store
+
+# Environment — never commit real credentials
+.env
+*.env.local
+
+# Firebase
+.firebase/
+firebase-debug.log
+firestore-debug.log
+storage.rules.bak
 *.pem
 
 # local env files

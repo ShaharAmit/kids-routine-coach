@@ -1,0 +1,16 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Avatar video assets — public read (pre-rendered, no personal data)
+    match /avatars/{allPaths=**} {
+      allow read: if true;
+      allow write: if false; // Upload only via admin/deployment scripts
+    }
+
+    // Generated TTS audio — only accessible by authenticated users
+    match /audio/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if false; // Written only by Cloud Functions (admin SDK)
+    }
+  }
+}
