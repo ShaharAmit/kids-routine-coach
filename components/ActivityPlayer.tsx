@@ -1,7 +1,7 @@
-import React, { useRef, useEffect, useCallback } from 'react';
+import React, { useEffect, useCallback } from 'react';
 import { StyleSheet, View, Text, TouchableOpacity, Dimensions } from 'react-native';
 import { VideoView, useVideoPlayer } from 'expo-video';
-import { Audio } from 'expo-av';
+import { useAudioPlayer, setAudioModeAsync } from 'expo-audio';
 import { ActivityKey } from '../types';
 import { ACTIVITIES } from '../constants/activities';
 import { localVideoPath, localAudioPath, buildAudioCacheKey } from '../services/assetSync';
@@ -26,69 +26,35 @@ export default function ActivityPlayer({
   onComplete,
 }: ActivityPlayerProps) {
   const activity = ACTIVITIES[activityKey];
-  const soundRef = useRef<Audio.Sound | null>(null);
 
   const videoUri = localVideoPath(activityKey);
   const cacheKey = buildAudioCacheKey(childName, activityKey, avatarId);
   const audioUri = localAudioPath(cacheKey);
 
-  const player = useVideoPlayer(videoUri, (p: ReturnType<typeof useVideoPlayer>) => {
+  const videoPlayer = useVideoPlayer(videoUri, (p: ReturnType<typeof useVideoPlayer>) => {
     p.loop = true;
     p.muted = true; // video is always silent; audio comes from TTS
     p.play();
   });
 
-  // Load and play audio when component mounts or step changes
+  // useAudioPlayer auto-manages lifecycle; component remounts per step via key prop
+  const audioPlayer = useAudioPlayer({ uri: audioUri });
+
+  // Configure audio session and start playback
   useEffect(() => {
-    let mounted = true;
-
-    async function loadAudio() {
-      try {
-        await Audio.setAudioModeAsync({
-          playsInSilentModeIOS: true,
-          staysActiveInBackground: false,
-        });
-
-        const { sound } = await Audio.Sound.createAsync(
-          { uri: audioUri },
-          { shouldPlay: true, volume: 1.0 }
-        );
-
-        if (mounted) {
-          soundRef.current = sound;
-        } else {
-          await sound.unloadAsync();
-        }
-      } catch (err) {
-        console.warn('[ActivityPlayer] Audio load error:', err);
-      }
-    }
-
-    loadAudio();
+    setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: false })
+      .then(() => audioPlayer.play())
+      .catch((err) => console.warn('[ActivityPlayer] Audio error:', err));
 
     return () => {
-      mounted = false;
-      if (soundRef.current) {
-        soundRef.current.stopAsync().then(() => soundRef.current?.unloadAsync());
-        soundRef.current = null;
-      }
+      videoPlayer.pause();
     };
-  }, [audioUri]);
-
-  // Stop media when unmounting
-  useEffect(() => {
-    return () => {
-      player.pause();
-    };
-  }, [player]);
+  }, [audioPlayer, videoPlayer]);
 
   const handleComplete = useCallback(() => {
-    // Stop audio before advancing
-    if (soundRef.current) {
-      soundRef.current.stopAsync();
-    }
+    audioPlayer.pause();
     onComplete();
-  }, [onComplete]);
+  }, [audioPlayer, onComplete]);
 
   if (!activity) return null;
 
@@ -119,7 +85,7 @@ export default function ActivityPlayer({
       {/* Avatar video loop */}
       <View style={styles.videoContainer}>
         <VideoView
-          player={player}
+          player={videoPlayer}
           style={styles.video}
           contentFit="contain"
           nativeControls={false}
