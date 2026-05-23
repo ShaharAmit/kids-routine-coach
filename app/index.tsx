@@ -11,6 +11,7 @@ import {
   Pressable,
   Animated,
   Platform,
+  useWindowDimensions,
 } from 'react-native';
 import { router, Stack } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -46,6 +47,7 @@ const roundedFontBold = Platform.select({
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const topInset = insets.top + (Platform.OS === 'android' ? 8 : 0);
   const [userId, setUserId] = useState('');
   const [cacheStage, setCacheStage] = useState('idle');
@@ -201,6 +203,58 @@ export default function HomeScreen() {
     ],
   };
 
+  const menuHorizontalMargin = 12;
+  const menuVerticalGap = 6;
+  const menuWidth = Math.max(176, Math.min(224, windowWidth * 0.48));
+  const estimatedMenuHeight = 248;
+  const fallbackTop = topInset + 50;
+  const fallbackLeft = Math.max(windowWidth - menuWidth - menuHorizontalMargin, menuHorizontalMargin);
+
+  const menuPosition = menuAnchor
+    ? {
+        top: Math.min(
+          menuAnchor.y + menuAnchor.height + menuVerticalGap,
+          windowHeight - insets.bottom - estimatedMenuHeight - 12
+        ),
+        left: Math.min(
+          Math.max(menuAnchor.x + menuAnchor.width - menuWidth, menuHorizontalMargin),
+          windowWidth - menuWidth - menuHorizontalMargin
+        ),
+      }
+    : {
+        top: fallbackTop,
+        left: fallbackLeft,
+      };
+
+  const widthScale = Math.min(Math.max(windowWidth / 390, 0.86), 1.18);
+  const heightScale = Math.min(Math.max(windowHeight / 844, 0.85), 1.12);
+  const uiScale = Math.min(widthScale, heightScale);
+
+  const panelHorizontalPadding = Math.round(22 * widthScale);
+  const panelCurve = Math.round(28 * widthScale);
+  const panelTopPadding = Math.round(16 * heightScale);
+
+  const sectionTitleSize = Math.round(38 * uiScale);
+  const sectionTitleLineHeight = Math.round(42 * uiScale);
+  const sectionSubtitleSize = Math.round(16 * uiScale);
+  const starSize = Math.round(46 * uiScale);
+
+  const ctaWidth = Math.max(188, Math.min(windowWidth - panelHorizontalPadding * 2 - 8, 360));
+  const ctaVerticalPadding = Math.round(Math.max(9, Math.min(12, 10 * uiScale)));
+  const ctaHorizontalPadding = Math.round(22 * widthScale);
+  const ctaFontSize = Math.round(18 * uiScale);
+
+  const sunSize = Math.round(Math.max(132, Math.min(176, windowWidth * 0.42)));
+  const sunFaceSize = Math.round(sunSize * 0.67);
+  const sunRayTranslate = -Math.round(sunSize * 0.44);
+  const sunRayWide = Math.max(7, Math.round(8 * uiScale));
+  const sunRayNarrow = Math.max(6, Math.round(7 * uiScale));
+  const sunRayLong = Math.max(28, Math.round(34 * uiScale));
+  const sunRayShort = Math.max(24, Math.round(28 * uiScale));
+
+  const moonSize = Math.round(Math.max(132, Math.min(176, windowWidth * 0.41)));
+  const moonFontSize = Math.round(moonSize * 0.59);
+
   return (
     <View style={styles.container}>
       <Stack.Screen
@@ -223,18 +277,28 @@ export default function HomeScreen() {
 
       <StatusBar barStyle="light-content" />
 
-      <View style={[styles.morningPanel, { paddingTop: topInset + 16 }]}> 
+      <View
+        style={[
+          styles.morningPanel,
+          {
+            paddingTop: topInset + panelTopPadding,
+            paddingHorizontal: panelHorizontalPadding,
+            borderBottomLeftRadius: panelCurve,
+            borderBottomRightRadius: panelCurve,
+          },
+        ]}
+      >
         <View style={styles.starLayer} pointerEvents="none">
-          <Text style={[styles.morningStar, { top: 10, left: 24 }]}>★</Text>
-          <Text style={[styles.morningStar, { top: 30, right: 28 }]}>★</Text>
-          <Text style={[styles.morningStar, { top: 94, left: 70 }]}>★</Text>
-          <Text style={[styles.morningStar, { top: 130, right: 74 }]}>★</Text>
+          <Text style={[styles.morningStar, { top: 10, left: 24, fontSize: starSize }]}>★</Text>
+          <Text style={[styles.morningStar, { top: 30, right: 28, fontSize: starSize }]}>★</Text>
+          <Text style={[styles.morningStar, { top: 94, left: 70, fontSize: starSize }]}>★</Text>
+          <Text style={[styles.morningStar, { top: 130, right: 74, fontSize: starSize }]}>★</Text>
         </View>
 
-        <Text style={styles.morningTitle}>MORNING</Text>
-        <Text style={styles.morningSubtitle}>Let's start the day!</Text>
+        <Text style={[styles.morningTitle, { fontSize: sectionTitleSize, lineHeight: sectionTitleLineHeight }]}>MORNING</Text>
+        <Text style={[styles.morningSubtitle, { fontSize: sectionSubtitleSize }]}>Let's start the day!</Text>
 
-        <View style={styles.sunGraphic}>
+        <View style={[styles.sunGraphic, { width: sunSize, height: sunSize }]}> 
           {Array.from({ length: 14 }).map((_, index) => (
             <View
               key={`ray-${index}`}
@@ -243,11 +307,11 @@ export default function HomeScreen() {
                 {
                   transform: [
                     { rotate: `${index * 25.7 + (index % 2 === 0 ? -3 : 3)}deg` },
-                    { translateY: -72 },
+                    { translateY: sunRayTranslate },
                   ],
-                  borderLeftWidth: index % 2 === 0 ? 8 : 7,
-                  borderRightWidth: index % 2 === 0 ? 8 : 7,
-                  borderBottomWidth: index % 3 === 0 ? 34 : 28,
+                  borderLeftWidth: index % 2 === 0 ? sunRayWide : sunRayNarrow,
+                  borderRightWidth: index % 2 === 0 ? sunRayWide : sunRayNarrow,
+                  borderBottomWidth: index % 3 === 0 ? sunRayLong : sunRayShort,
                   borderLeftColor: 'transparent',
                   borderRightColor: 'transparent',
                   borderTopColor: 'transparent',
@@ -257,37 +321,108 @@ export default function HomeScreen() {
               ]}
             />
           ))}
-          <View style={styles.sunFaceCircle}>
-            <View style={styles.sunFaceEyesRow}>
-              <View style={[styles.sunEye, styles.sunEyeSoft]} />
-              <View style={[styles.sunEye, styles.sunEyeSoft]} />
+          <View
+            style={[
+              styles.sunFaceCircle,
+              {
+                width: sunFaceSize,
+                height: sunFaceSize,
+                borderRadius: sunFaceSize / 2,
+              },
+            ]}
+          >
+            <View style={[styles.sunFaceEyesRow, { width: Math.round(sunFaceSize * 0.46) }]}>
+              <View
+                style={[
+                  styles.sunEye,
+                  styles.sunEyeSoft,
+                  {
+                    width: Math.max(7, Math.round(sunFaceSize * 0.085)),
+                    height: Math.max(7, Math.round(sunFaceSize * 0.085)),
+                    borderRadius: Math.max(4, Math.round(sunFaceSize * 0.05)),
+                  },
+                ]}
+              />
+              <View
+                style={[
+                  styles.sunEye,
+                  styles.sunEyeSoft,
+                  {
+                    width: Math.max(7, Math.round(sunFaceSize * 0.085)),
+                    height: Math.max(7, Math.round(sunFaceSize * 0.085)),
+                    borderRadius: Math.max(4, Math.round(sunFaceSize * 0.05)),
+                  },
+                ]}
+              />
             </View>
-            <View style={styles.sunSmile} />
+            <View
+              style={[
+                styles.sunSmile,
+                {
+                  width: Math.round(sunFaceSize * 0.37),
+                  height: Math.round(sunFaceSize * 0.17),
+                  borderBottomLeftRadius: Math.round(sunFaceSize * 0.22),
+                  borderBottomRightRadius: Math.round(sunFaceSize * 0.22),
+                },
+              ]}
+            />
           </View>
         </View>
 
-        <TouchableOpacity style={styles.morningCta} onPress={() => handleStart('morning')} activeOpacity={0.88}>
-          <Text style={styles.morningCtaText}>SHOW MORNING ROUTINES  →</Text>
+        <TouchableOpacity
+          style={[
+            styles.morningCta,
+            {
+              width: ctaWidth,
+              paddingVertical: ctaVerticalPadding,
+              paddingHorizontal: ctaHorizontalPadding,
+            },
+          ]}
+          onPress={() => handleStart('morning')}
+          activeOpacity={0.88}
+        >
+          <Text style={[styles.morningCtaText, { fontSize: ctaFontSize }]}>SHOW MORNING ROUTINES  →</Text>
         </TouchableOpacity>
       </View>
 
-      <View style={styles.eveningPanel}>
+      <View
+        style={[
+          styles.eveningPanel,
+          {
+            paddingHorizontal: panelHorizontalPadding,
+            paddingTop: panelTopPadding,
+            borderTopLeftRadius: panelCurve,
+            borderTopRightRadius: panelCurve,
+          },
+        ]}
+      >
         <View style={styles.starLayer} pointerEvents="none">
-          <Text style={[styles.eveningStar, { top: 16, left: 26 }]}>★</Text>
-          <Text style={[styles.eveningStar, { top: 48, right: 30 }]}>★</Text>
-          <Text style={[styles.eveningStar, { top: 112, left: 74 }]}>★</Text>
-          <Text style={[styles.eveningStar, { top: 138, right: 92 }]}>★</Text>
+          <Text style={[styles.eveningStar, { top: 16, left: 26, fontSize: starSize }]}>★</Text>
+          <Text style={[styles.eveningStar, { top: 48, right: 30, fontSize: starSize }]}>★</Text>
+          <Text style={[styles.eveningStar, { top: 112, left: 74, fontSize: starSize }]}>★</Text>
+          <Text style={[styles.eveningStar, { top: 138, right: 92, fontSize: starSize }]}>★</Text>
         </View>
 
-        <Text style={styles.eveningTitle}>EVENING</Text>
-        <Text style={styles.eveningSubtitle}>Time to wind down</Text>
+        <Text style={[styles.eveningTitle, { fontSize: sectionTitleSize, lineHeight: sectionTitleLineHeight }]}>EVENING</Text>
+        <Text style={[styles.eveningSubtitle, { fontSize: sectionSubtitleSize }]}>Time to wind down</Text>
 
-        <View style={styles.moonHalo}>
-          <Text style={styles.moonEmoji}>🌙</Text>
+        <View style={[styles.moonHalo, { width: moonSize, height: moonSize, borderRadius: moonSize / 2 }]}> 
+          <Text style={[styles.moonEmoji, { fontSize: moonFontSize }]}>🌙</Text>
         </View>
 
-        <TouchableOpacity style={styles.eveningCta} onPress={() => handleStart('evening')} activeOpacity={0.88}>
-          <Text style={styles.eveningCtaText}>SHOW EVENING ROUTINES  →</Text>
+        <TouchableOpacity
+          style={[
+            styles.eveningCta,
+            {
+              width: ctaWidth,
+              paddingVertical: ctaVerticalPadding,
+              paddingHorizontal: ctaHorizontalPadding,
+            },
+          ]}
+          onPress={() => handleStart('evening')}
+          activeOpacity={0.88}
+        >
+          <Text style={[styles.eveningCtaText, { fontSize: ctaFontSize }]}>SHOW EVENING ROUTINES  →</Text>
         </TouchableOpacity>
       </View>
 
@@ -302,12 +437,8 @@ export default function HomeScreen() {
           <Animated.View
             style={[
               styles.menuPopover,
-              menuAnchor
-                ? {
-                    top: menuAnchor.y + menuAnchor.height,
-                    left: Math.max(menuAnchor.x - 166, 12),
-                  }
-                : { top: topInset + 50, right: 45 },
+              menuPosition,
+              { width: menuWidth },
               menuAnimatedStyle,
             ]}
           >
