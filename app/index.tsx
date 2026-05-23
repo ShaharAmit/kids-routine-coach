@@ -1,27 +1,94 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   StyleSheet,
   View,
   Text,
-  FlatList,
   TouchableOpacity,
   ActivityIndicator,
   StatusBar,
+  Alert,
+  Modal,
+  Pressable,
+  Animated,
+  Platform,
 } from 'react-native';
-import { router } from 'expo-router';
+import { router, Stack } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUserRoutines } from '../hooks/useRoutine';
-import RoutineCard from '../components/RoutineCard';
 import { ensureAuth } from '../services/firebase';
 import { getChildProfile } from '../services/profile';
 import { subscribeAssetCacheStatus } from '../services/assetCacheService';
 
+function timeToMinutes(value: string): number {
+  const [hourStr, minuteStr] = value.split(':');
+  const hour = Number(hourStr);
+  const minute = Number(minuteStr);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return 8 * 60;
+  return hour * 60 + minute;
+}
+
+function isMorningTime(value: string): boolean {
+  const minutes = timeToMinutes(value);
+  return minutes >= 4 * 60 && minutes < 15 * 60;
+}
+
+const roundedFont = Platform.select({
+  ios: 'Avenir Next Rounded',
+  android: 'sans-serif-medium',
+  default: 'System',
+});
+
+const roundedFontBold = Platform.select({
+  ios: 'Avenir Next Rounded',
+  android: 'sans-serif',
+  default: 'System',
+});
+
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
-  const [userId, setUserId] = useState<string>('');
-  const [childName, setChildName] = useState<string>('');
-  const [cacheStage, setCacheStage] = useState<string>('idle');
+  const topInset = insets.top + (Platform.OS === 'android' ? 8 : 0);
+  const [userId, setUserId] = useState('');
+  const [cacheStage, setCacheStage] = useState('idle');
+  const [menuVisible, setMenuVisible] = useState(false);
+  const [routinePickerSegment, setRoutinePickerSegment] = useState<'morning' | 'evening' | null>(null);
+  const menuAnim = useRef(new Animated.Value(0)).current;
   const { routines, loading, error } = useUserRoutines(userId);
+
+  const primaryRoutine = routines[0] ?? null;
+
+  const segmentCounts = useMemo(() => {
+    if (!primaryRoutine) return { morning: 0, evening: 0 };
+
+    const stepTimes = Array.from({ length: primaryRoutine.activityStack.length }, (_, index) =>
+      primaryRoutine.stepTimes?.[index] ?? primaryRoutine.scheduledTime
+    );
+
+    let morning = 0;
+    let evening = 0;
+
+    stepTimes.forEach((time) => {
+      if (isMorningTime(time)) {
+        morning += 1;
+      } else {
+        evening += 1;
+      }
+    });
+
+    return { morning, evening };
+  }, [primaryRoutine]);
+
+  const routinesForSegment = useMemo(() => {
+    if (!routinePickerSegment) return [];
+
+    return routines.filter((routine) => {
+      const stepTimes = Array.from({ length: routine.activityStack.length }, (_, index) =>
+        routine.stepTimes?.[index] ?? routine.scheduledTime
+      );
+      return stepTimes.some((time) =>
+        routinePickerSegment === 'morning' ? isMorningTime(time) : !isMorningTime(time)
+      );
+    });
+  }, [routinePickerSegment, routines]);
 
   useEffect(() => {
     const unsubscribe = subscribeAssetCacheStatus((next) => {
@@ -43,7 +110,7 @@ export default function HomeScreen() {
 
       setUserId(user.uid);
       if (profile?.childName) {
-        setChildName(profile.childName);
+        // kept for future personalization
       }
     }
 
@@ -59,8 +126,8 @@ export default function HomeScreen() {
   if (loading) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator size="large" color="#4A90D9" />
-        <Text style={styles.loadingText}>Loading routines…</Text>
+        <ActivityIndicator size="large" color="#5F8F86" />
+        <Text style={styles.loadingText}>Loading routines...</Text>
       </View>
     );
   }
@@ -68,67 +135,220 @@ export default function HomeScreen() {
   if (error) {
     return (
       <View style={styles.centered}>
-        <Text style={styles.errorText}>⚠️ Failed to load routines.</Text>
+        <Text style={styles.errorText}>Failed to load routines.</Text>
         <Text style={styles.errorSub}>{error.message}</Text>
       </View>
     );
   }
 
+  const handleStart = (segment: 'morning' | 'evening') => {
+    if (routines.length === 0) {
+      Alert.alert('Create routine', 'Please create a routine first.');
+      router.push('/parent/create');
+      return;
+    }
+
+    setRoutinePickerSegment(segment);
+  };
+
+  const openMenu = () => {
+    setMenuVisible(true);
+    menuAnim.setValue(0);
+    Animated.timing(menuAnim, {
+      toValue: 1,
+      duration: 170,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const closeMenu = () => {
+    Animated.timing(menuAnim, {
+      toValue: 0,
+      duration: 130,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) setMenuVisible(false);
+    });
+  };
+
+  const menuAnimatedStyle = {
+    opacity: menuAnim,
+    transform: [
+      {
+        translateY: menuAnim.interpolate({
+          inputRange: [0, 1],
+          outputRange: [-8, 0],
+        }),
+      },
+      {
+        scale: menuAnim.interpolate({
+          inputRange: [0, 1],
+          outputRange: [0.98, 1],
+        }),
+      },
+    ],
+  };
+
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#4A90D9" />
+      <Stack.Screen
+        options={{
+          headerStyle: { backgroundColor: '#4A90D9' },
+          headerTintColor: '#FFF',
+          headerTitleStyle: { fontFamily: roundedFontBold, fontSize: 17 },
+          headerRight: () => (
+            <TouchableOpacity
+              style={styles.headerMenuButton}
+              onPress={() => (menuVisible ? closeMenu() : openMenu())}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.headerMenuIcon}>≡</Text>
+            </TouchableOpacity>
+          ),
+        }}
+      />
 
-      <View style={[styles.heroBar, { paddingTop: insets.top + 12 }]}>
-        <View style={styles.heroTopRow}>
-          <Text style={styles.heroTitle}>🌟 Good Morning{childName ? `, ${childName}` : ''}!</Text>
-          <TouchableOpacity style={styles.settingsBtn} onPress={() => router.push('/settings' as never)}>
-            <Text style={styles.settingsBtnText}>⚙️</Text>
-          </TouchableOpacity>
+      <StatusBar barStyle="light-content" />
+
+      <View style={[styles.morningPanel, { paddingTop: topInset + 16 }]}> 
+        <View style={styles.starLayer} pointerEvents="none">
+          <Text style={[styles.morningStar, { top: 10, left: 24 }]}>★</Text>
+          <Text style={[styles.morningStar, { top: 30, right: 28 }]}>★</Text>
+          <Text style={[styles.morningStar, { top: 94, left: 70 }]}>★</Text>
+          <Text style={[styles.morningStar, { top: 130, right: 74 }]}>★</Text>
         </View>
-        <Text style={styles.heroSub}>
-          {routines.length === 0
-            ? "No routines yet. Tap + to create one!"
-            : `You have ${routines.length} routine${routines.length > 1 ? 's' : ''} scheduled.`}
-        </Text>
-        {cacheStage === 'warming-assets' ? (
-          <View style={styles.cacheBadge}>
-            <Text style={styles.cacheBadgeText}>Preparing audio and videos...</Text>
+
+        <Text style={styles.morningTitle}>MORNING</Text>
+        <Text style={styles.morningSubtitle}>Let's start the day!</Text>
+
+        <View style={styles.sunGraphic}>
+          <View style={styles.sunGlow} />
+          {Array.from({ length: 10 }).map((_, index) => (
+            <View
+              key={`ray-${index}`}
+              style={[
+                styles.sunRay,
+                {
+                  transform: [{ rotate: `${index * 36}deg` }, { translateY: -60 }],
+                  width: index % 2 === 0 ? 12 : 10,
+                  height: index % 3 === 0 ? 34 : 28,
+                  opacity: index % 4 === 0 ? 0.95 : 0.85,
+                },
+              ]}
+            />
+          ))}
+          <View style={styles.sunFaceCircle}>
+            <View style={styles.sunFaceEyesRow}>
+              <View style={styles.sunEye} />
+              <View style={[styles.sunEye, styles.sunEyeWink]} />
+            </View>
+            <View style={styles.sunNose} />
+            <View style={styles.sunSmile} />
+            <View style={styles.sunCheekLeft} />
+            <View style={styles.sunCheekRight} />
           </View>
-        ) : null}
-        <TouchableOpacity
-          style={styles.editSetupBtn}
-          onPress={() => {
-            console.log('[Home] Edit Questionnaire pressed');
-            router.push('/onboarding/questionnaire' as never);
-          }}
-        >
-          <Text style={styles.editSetupText}>Edit Questionnaire</Text>
+        </View>
+
+        <TouchableOpacity style={styles.morningCta} onPress={() => handleStart('morning')} activeOpacity={0.88}>
+          <Text style={styles.morningCtaText}>SHOW MORNING ROUTINES  →</Text>
         </TouchableOpacity>
       </View>
 
-      <FlatList
-        data={routines}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => <RoutineCard routine={item} />}
-        contentContainerStyle={styles.listContent}
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyEmoji}>📋</Text>
-            <Text style={styles.emptyText}>No routines yet!</Text>
-            <Text style={styles.emptySub}>
-              Tap the + button below to create your first morning routine.
-            </Text>
-          </View>
-        }
-      />
+      <View style={styles.eveningPanel}>
+        <View style={styles.starLayer} pointerEvents="none">
+          <Text style={[styles.eveningStar, { top: 16, left: 26 }]}>★</Text>
+          <Text style={[styles.eveningStar, { top: 48, right: 30 }]}>★</Text>
+          <Text style={[styles.eveningStar, { top: 112, left: 74 }]}>★</Text>
+          <Text style={[styles.eveningStar, { top: 138, right: 92 }]}>★</Text>
+        </View>
 
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => router.push('/parent/create')}
-        activeOpacity={0.85}
+        <Text style={styles.eveningTitle}>EVENING</Text>
+        <Text style={styles.eveningSubtitle}>Time to wind down</Text>
+
+        <View style={styles.moonHalo}>
+          <Text style={styles.moonEmoji}>🌙</Text>
+        </View>
+
+        <TouchableOpacity style={styles.eveningCta} onPress={() => handleStart('evening')} activeOpacity={0.88}>
+          <Text style={styles.eveningCtaText}>SHOW EVENING ROUTINES  →</Text>
+        </TouchableOpacity>
+      </View>
+
+      {cacheStage === 'warming-assets' ? (
+        <View style={[styles.prepBadge, { bottom: 20 + Math.max(insets.bottom, 8) }]}> 
+          <Text style={styles.prepBadgeText}>Preparing media...</Text>
+        </View>
+      ) : null}
+
+      {menuVisible ? (
+        <Animated.View style={[styles.menuPopover, { top: topInset + 54 }, menuAnimatedStyle]}>
+          <Text style={styles.menuTitle}>Menu</Text>
+
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => {
+              closeMenu();
+              router.push('/settings' as never);
+            }}
+          >
+            <Text style={styles.menuItemText}>Settings</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => {
+              closeMenu();
+              router.push('/onboarding/questionnaire' as never);
+            }}
+          >
+            <Text style={styles.menuItemText}>Questionnaire</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => {
+              closeMenu();
+              router.push('/parent/create');
+            }}
+          >
+            <Text style={styles.menuItemText}>Add Routine</Text>
+          </TouchableOpacity>
+        </Animated.View>
+      ) : null}
+
+      <Modal
+        visible={routinePickerSegment !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setRoutinePickerSegment(null)}
       >
-        <Text style={styles.fabText}>+</Text>
-      </TouchableOpacity>
+        <Pressable style={styles.menuOverlay} onPress={() => setRoutinePickerSegment(null)}>
+          <Pressable style={styles.menuSheet} onPress={() => {}}>
+            <Text style={styles.menuTitle}>
+              {routinePickerSegment === 'evening' ? 'Evening Routines' : 'Morning Routines'}
+            </Text>
+
+            {routinesForSegment.length === 0 ? (
+              <Text style={styles.emptyRoutinesText}>No routines in this time range yet.</Text>
+            ) : (
+              routinesForSegment.map((routine) => (
+                <TouchableOpacity
+                  key={routine.id}
+                  style={styles.menuItem}
+                  onPress={() => {
+                    const segment = routinePickerSegment;
+                    setRoutinePickerSegment(null);
+                    if (!segment) return;
+                    router.push(`/routine/${routine.id}?segment=${segment}` as never);
+                  }}
+                >
+                  <Text style={styles.menuItemText}>{routine.childName}</Text>
+                </TouchableOpacity>
+              ))
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -136,138 +356,320 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F5F7FA',
+    backgroundColor: '#2D3C6A',
+  },
+  headerMenuButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#FFFFFFCC',
+    borderWidth: 1,
+    borderColor: '#D8DCCF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerMenuIcon: {
+    fontSize: 21,
+    color: '#4C5D57',
+    lineHeight: 22,
+    fontFamily: roundedFontBold ?? 'System',
   },
   centered: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: '#EEF2E5',
     padding: 24,
   },
   loadingText: {
     marginTop: 12,
-    color: '#666',
-    fontSize: 16,
+    color: '#466761',
+    fontSize: 15,
+    fontFamily: roundedFont,
   },
   errorText: {
     fontSize: 18,
-    fontWeight: '700',
-    color: '#E53935',
+    color: '#8B2F2F',
+    fontFamily: roundedFontBold ?? 'System',
     marginBottom: 8,
   },
   errorSub: {
     fontSize: 14,
-    color: '#888',
+    color: '#6C6C6C',
     textAlign: 'center',
+    fontFamily: roundedFont,
   },
-  heroBar: {
-    backgroundColor: '#4A90D9',
-    paddingBottom: 24,
-    paddingHorizontal: 20,
-  },
-  heroTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  heroTitle: {
-    fontSize: 26,
-    fontWeight: '800',
-    color: '#FFF',
-    marginBottom: 4,
+  morningPanel: {
     flex: 1,
-    marginRight: 10,
-  },
-  settingsBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: '#FFFFFF22',
+    backgroundColor: '#EAF0E3',
     alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#FFFFFF55',
+    justifyContent: 'flex-start',
+    paddingHorizontal: 22,
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
   },
-  settingsBtnText: {
-    fontSize: 16,
-  },
-  heroSub: {
-    fontSize: 15,
-    color: '#D0E8FF',
-  },
-  cacheBadge: {
-    marginTop: 10,
-    alignSelf: 'flex-start',
-    backgroundColor: '#FFF5CC',
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  cacheBadgeText: {
-    color: '#7A5A00',
-    fontWeight: '700',
-    fontSize: 12,
-  },
-  editSetupBtn: {
-    marginTop: 12,
-    alignSelf: 'flex-start',
-    backgroundColor: '#FFFFFF22',
-    borderWidth: 1,
-    borderColor: '#FFFFFF55',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
-  },
-  editSetupText: {
-    color: '#FFF',
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  listContent: {
-    paddingVertical: 12,
-    paddingBottom: 100,
-  },
-  emptyContainer: {
+  eveningPanel: {
+    flex: 1,
+    backgroundColor: '#46519C',
     alignItems: 'center',
-    paddingTop: 80,
-    paddingHorizontal: 40,
+    justifyContent: 'flex-start',
+    paddingHorizontal: 22,
+    paddingTop: 16,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
   },
-  emptyEmoji: {
-    fontSize: 64,
-    marginBottom: 16,
+  starLayer: {
+    ...StyleSheet.absoluteFillObject,
   },
-  emptyText: {
-    fontSize: 22,
-    fontWeight: '700',
-    color: '#333',
-    marginBottom: 8,
-  },
-  emptySub: {
-    fontSize: 15,
-    color: '#888',
-    textAlign: 'center',
-    lineHeight: 22,
-  },
-  fab: {
+  morningStar: {
     position: 'absolute',
-    bottom: 28,
-    right: 24,
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: '#4A90D9',
+    color: '#FFFFFF',
+    fontSize: 46,
+    opacity: 0.2,
+  },
+  eveningStar: {
+    position: 'absolute',
+    color: '#E8EAFF',
+    fontSize: 46,
+    opacity: 0.16,
+  },
+  morningTitle: {
+    marginTop: 6,
+    fontSize: 38,
+    lineHeight: 42,
+    letterSpacing: 1,
+    color: '#6F8E87',
+    fontFamily: roundedFontBold ?? 'System',
+  },
+  morningSubtitle: {
+    marginTop: 2,
+    fontSize: 16,
+    color: '#507068',
+    fontFamily: roundedFont,
+  },
+  sunGraphic: {
+    width: 156,
+    height: 156,
+    marginTop: 12,
+    marginBottom: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    elevation: 8,
-    shadowColor: '#4A90D9',
-    shadowOpacity: 0.4,
+  },
+  sunGlow: {
+    position: 'absolute',
+    width: 132,
+    height: 132,
+    borderRadius: 66,
+    backgroundColor: '#FFF4B5',
+    opacity: 0.45,
+  },
+  sunRay: {
+    position: 'absolute',
+    width: 12,
+    height: 26,
+    borderRadius: 8,
+    backgroundColor: '#F9C45D',
+  },
+  sunFaceCircle: {
+    width: 106,
+    height: 106,
+    borderRadius: 53,
+    backgroundColor: '#FFD56A',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#E8B34B',
+  },
+  sunFaceEyesRow: {
+    width: 44,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 8,
+  },
+  sunEye: {
+    width: 10,
+    height: 10,
+    borderRadius: 6,
+    backgroundColor: '#7A5B2D',
+  },
+  sunEyeWink: {
+    height: 3,
+    marginTop: 4,
+  },
+  sunNose: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: '#9A773F',
+    marginTop: 8,
+    opacity: 0.45,
+  },
+  sunSmile: {
+    width: 38,
+    height: 20,
+    borderBottomWidth: 4,
+    borderColor: '#7A5B2D',
+    borderBottomLeftRadius: 22,
+    borderBottomRightRadius: 22,
+    marginTop: 8,
+  },
+  sunCheekLeft: {
+    position: 'absolute',
+    width: 18,
+    height: 14,
+    borderRadius: 9,
+    backgroundColor: '#F6B07A',
+    opacity: 0.72,
+    left: 14,
+    top: 56,
+  },
+  sunCheekRight: {
+    position: 'absolute',
+    width: 18,
+    height: 14,
+    borderRadius: 9,
+    backgroundColor: '#F6B07A',
+    opacity: 0.72,
+    right: 14,
+    top: 56,
+  },
+  morningCta: {
+    borderRadius: 999,
+    backgroundColor: '#6A9D93',
+    minWidth: 208,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 22,
+    shadowColor: '#3E7169',
+    shadowOpacity: 0.25,
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
   },
-  fabText: {
-    fontSize: 32,
-    color: '#FFF',
-    lineHeight: 36,
-    fontWeight: '300',
+  morningCtaText: {
+    color: '#F4FBF7',
+    fontSize: 18,
+    letterSpacing: 0.5,
+    fontFamily: roundedFontBold ?? 'System',
+  },
+  eveningTitle: {
+    marginTop: 4,
+    fontSize: 38,
+    lineHeight: 42,
+    letterSpacing: 1,
+    color: '#F7F8FF',
+    fontFamily: roundedFontBold ?? 'System',
+  },
+  eveningSubtitle: {
+    marginTop: 2,
+    fontSize: 16,
+    color: '#B5BDF6',
+    fontFamily: roundedFont,
+  },
+  moonHalo: {
+    marginTop: 16,
+    marginBottom: 16,
+    width: 156,
+    height: 156,
+    borderRadius: 78,
+    backgroundColor: '#3B458B',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#D9DCFF',
+    shadowOpacity: 0.35,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 3,
+  },
+  moonEmoji: {
+    fontSize: 92,
+  },
+  eveningCta: {
+    borderRadius: 999,
+    backgroundColor: '#8F84D5',
+    minWidth: 208,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 22,
+    shadowColor: '#5A53A4',
+    shadowOpacity: 0.28,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
+  },
+  eveningCtaText: {
+    color: '#F8F5FF',
+    fontSize: 18,
+    letterSpacing: 0.5,
+    fontFamily: roundedFontBold ?? 'System',
+  },
+  prepBadge: {
+    position: 'absolute',
+    alignSelf: 'center',
+    backgroundColor: '#FFF2C9',
+    borderWidth: 1,
+    borderColor: '#ECD896',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  prepBadgeText: {
+    fontSize: 12,
+    color: '#6C5D2A',
+    fontFamily: roundedFontBold ?? 'System',
+  },
+  menuPopover: {
+    position: 'absolute',
+    right: 16,
+    minWidth: 190,
+    zIndex: 30,
+    borderRadius: 18,
+    backgroundColor: '#FBFAF3',
+    borderWidth: 1,
+    borderColor: '#E4DDC7',
+    padding: 14,
+  },
+  menuOverlay: {
+    flex: 1,
+    backgroundColor: '#00000055',
+    justifyContent: 'flex-start',
+    paddingTop: 84,
+    paddingHorizontal: 16,
+  },
+  menuSheet: {
+    borderRadius: 18,
+    backgroundColor: '#FBFAF3',
+    borderWidth: 1,
+    borderColor: '#E4DDC7',
+    padding: 14,
+  },
+  menuTitle: {
+    fontSize: 18,
+    color: '#3C3A33',
+    marginBottom: 8,
+    fontFamily: roundedFontBold ?? 'System',
+  },
+  menuItem: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E8DFC3',
+    backgroundColor: '#FFFDF6',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 8,
+  },
+  menuItemText: {
+    color: '#4A4438',
+    fontSize: 15,
+    fontFamily: roundedFont,
+  },
+  emptyRoutinesText: {
+    color: '#6D6756',
+    fontSize: 14,
+    fontFamily: roundedFont,
+    paddingHorizontal: 4,
+    paddingVertical: 8,
   },
 });
