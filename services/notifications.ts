@@ -60,7 +60,8 @@ export async function scheduleRoutineNotification(routine: Routine): Promise<str
     await Notifications.cancelScheduledNotificationAsync(routine.notificationId).catch(() => {});
   }
 
-  const [hourStr, minuteStr] = routine.scheduledTime.split(':');
+  const triggerTime = routine.stepTimes?.[0] ?? routine.scheduledTime;
+  const [hourStr, minuteStr] = triggerTime.split(':');
   const hour = parseInt(hourStr, 10);
   const minute = parseInt(minuteStr, 10);
 

@@ -1,17 +1,12 @@
 import React, { useEffect, useCallback } from 'react';
-import { Stack, router } from 'expo-router';
+import { AppState } from 'react-native';
+import { Stack, router, usePathname } from 'expo-router';
 import * as Notifications from 'expo-notifications';
-import { requestNotificationPermissions } from '../services/notifications';
-import { ensureAuth } from '../services/firebase';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { clearDebugHomeAccess, hasDebugHomeAccess } from '../services/debugFlow';
 
 export default function RootLayout() {
-  // Sign in anonymously + request permissions on first launch
-  useEffect(() => {
-    requestNotificationPermissions();
-    ensureAuth().catch((err) =>
-      console.warn('[RootLayout] Anonymous sign-in failed:', err)
-    );
-  }, []);
+  const pathname = usePathname();
 
   // Handle notification tap when app is open or in background
   const handleNotificationResponse = useCallback(
@@ -30,6 +25,27 @@ export default function RootLayout() {
   );
 
   useEffect(() => {
+    const enforceDebugLaunchRouting = () => {
+      const alreadyInOnboarding = pathname.startsWith('/onboarding');
+      const alreadyInLoading = pathname === '/loading';
+      if (!hasDebugHomeAccess() && !alreadyInOnboarding && !alreadyInLoading) {
+        router.replace('/onboarding/welcome' as never);
+      }
+    };
+
+    enforceDebugLaunchRouting();
+
+    const appStateSub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        enforceDebugLaunchRouting();
+        return;
+      }
+
+      if (state === 'inactive' || state === 'background') {
+        clearDebugHomeAccess();
+      }
+    });
+
     // Listener for taps while app is running
     const responseListener = Notifications.addNotificationResponseReceivedListener(
       handleNotificationResponse
@@ -43,21 +59,28 @@ export default function RootLayout() {
     });
 
     return () => {
+      appStateSub.remove();
       responseListener.remove();
     };
-  }, [handleNotificationResponse]);
+  }, [handleNotificationResponse, pathname]);
 
   return (
-    <Stack
-      screenOptions={{
-        headerStyle: { backgroundColor: '#4A90D9' },
-        headerTintColor: '#FFF',
-        headerTitleStyle: { fontWeight: '700', fontSize: 18 },
-      }}
-    >
-      <Stack.Screen name="index" options={{ title: 'Kids Routine Coach' }} />
-      <Stack.Screen name="routine/[id]" options={{ title: 'Active Routine', headerShown: false }} />
-      <Stack.Screen name="parent/create" options={{ title: 'Create Routine' }} />
-    </Stack>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <Stack
+        initialRouteName="loading"
+        screenOptions={{
+          headerStyle: { backgroundColor: '#4A90D9' },
+          headerTintColor: '#FFF',
+          headerTitleStyle: { fontWeight: '700', fontSize: 18 },
+        }}
+      >
+        <Stack.Screen name="loading" options={{ title: 'Loading', headerShown: false }} />
+        <Stack.Screen name="onboarding" options={{ headerShown: false }} />
+        <Stack.Screen name="index" options={{ title: 'Kids Routine Coach' }} />
+        <Stack.Screen name="settings" options={{ title: 'Settings' }} />
+        <Stack.Screen name="routine/[id]" options={{ title: 'Active Routine', headerShown: false }} />
+        <Stack.Screen name="parent/create" options={{ title: 'Create Routine' }} />
+      </Stack>
+    </GestureHandlerRootView>
   );
 }

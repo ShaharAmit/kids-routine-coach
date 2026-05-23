@@ -1,13 +1,13 @@
-import React, { useEffect, useCallback } from 'react';
+import React, { useEffect, useCallback, useState } from 'react';
 import { StyleSheet, View, Text, TouchableOpacity, Dimensions } from 'react-native';
 import { VideoView, useVideoPlayer } from 'expo-video';
-import { useAudioPlayer, setAudioModeAsync } from 'expo-audio';
-import { ActivityKey } from '../types';
+import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
+import { ActivityStep } from '../types';
 import { ACTIVITIES } from '../constants/activities';
 import { localVideoPath, localAudioPath, buildAudioCacheKey } from '../services/assetSync';
 
 interface ActivityPlayerProps {
-  activityKey: ActivityKey;
+  activityStep: ActivityStep;
   childName: string;
   avatarId: string;
   stepNumber: number;
@@ -18,43 +18,101 @@ interface ActivityPlayerProps {
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 export default function ActivityPlayer({
-  activityKey,
+  activityStep,
   childName,
   avatarId,
   stepNumber,
   totalSteps,
   onComplete,
 }: ActivityPlayerProps) {
-  const activity = ACTIVITIES[activityKey];
+  const [activityIndex, setActivityIndex] = useState(0);
+  const [videoEnded, setVideoEnded] = useState(false);
 
-  const videoUri = localVideoPath(activityKey);
-  const cacheKey = buildAudioCacheKey(childName, activityKey, avatarId);
+  const currentActivityKey = activityStep[activityIndex];
+  const activity = ACTIVITIES[currentActivityKey];
+
+  const videoUri = localVideoPath(currentActivityKey, avatarId);
+  const cacheKey = buildAudioCacheKey(childName, currentActivityKey, avatarId);
   const audioUri = localAudioPath(cacheKey);
 
   const videoPlayer = useVideoPlayer(videoUri, (p: ReturnType<typeof useVideoPlayer>) => {
-    p.loop = true;
+    p.loop = false;
     p.muted = true; // video is always silent; audio comes from TTS
     p.play();
   });
 
   // useAudioPlayer auto-manages lifecycle; component remounts per step via key prop
-  const audioPlayer = useAudioPlayer({ uri: audioUri });
+  const audioPlayer = useAudioPlayer(audioUri, { updateInterval: 250 });
+  const audioStatus = useAudioPlayerStatus(audioPlayer);
 
-  // Configure audio session and start playback
+  // Configure audio session once for consistent playback in silent mode.
   useEffect(() => {
-    setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: false })
-      .then(() => audioPlayer.play())
-      .catch((err) => console.warn('[ActivityPlayer] Audio error:', err));
+    setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: false }).catch((err) =>
+      console.warn('[ActivityPlayer] Failed to set audio mode:', err)
+    );
+
+    const videoEndSub = videoPlayer.addListener('playToEnd', () => {
+      setVideoEnded(true);
+      audioPlayer.pause();
+    });
 
     return () => {
-      videoPlayer.pause();
+      videoEndSub.remove();
+
+      // On fast screen unmounts, native media objects can already be released.
+      try {
+        audioPlayer.pause();
+      } catch {
+        // no-op
+      }
+
+      try {
+        videoPlayer.pause();
+      } catch {
+        // no-op
+      }
     };
   }, [audioPlayer, videoPlayer]);
 
+  // Start playback only after the source is loaded.
+  useEffect(() => {
+    if (!audioStatus.isLoaded || audioStatus.playing) return;
+
+    audioPlayer.loop = false;
+    audioPlayer.muted = false;
+    audioPlayer.volume = 1;
+    audioPlayer.play();
+  }, [audioPlayer, audioStatus.isLoaded, audioStatus.playing]);
+
+  const handleRetryVideo = useCallback(async () => {
+    setVideoEnded(false);
+    videoPlayer.replay();
+
+    if (audioStatus.isLoaded) {
+      try {
+        await audioPlayer.seekTo(0);
+      } catch {
+        // If seek fails for any reason, still attempt fresh playback.
+      }
+      audioPlayer.play();
+    }
+  }, [audioPlayer, audioStatus.isLoaded, videoPlayer]);
+
   const handleComplete = useCallback(() => {
-    audioPlayer.pause();
+    try {
+      audioPlayer.pause();
+    } catch {
+      // no-op
+    }
+
+    if (activityIndex < activityStep.length - 1) {
+      setVideoEnded(false);
+      setActivityIndex((prev) => prev + 1);
+      return;
+    }
+
     onComplete();
-  }, [audioPlayer, onComplete]);
+  }, [activityIndex, activityStep.length, audioPlayer, onComplete]);
 
   if (!activity) return null;
 
@@ -78,6 +136,12 @@ export default function ActivityPlayer({
         Step {stepNumber} of {totalSteps}
       </Text>
 
+      {activityStep.length > 1 ? (
+        <Text style={styles.subCounter}>
+          Part {activityIndex + 1} of {activityStep.length}
+        </Text>
+      ) : null}
+
       {/* Activity emoji + label */}
       <Text style={styles.emoji}>{activity.emoji}</Text>
       <Text style={[styles.activityLabel, { color: activity.color }]}>{activity.label}</Text>
@@ -92,6 +156,16 @@ export default function ActivityPlayer({
         />
       </View>
 
+      {videoEnded && (
+        <TouchableOpacity
+          style={[styles.retryButton, { borderColor: activity.color }]}
+          onPress={handleRetryVideo}
+          activeOpacity={0.85}
+        >
+          <Text style={[styles.retryButtonText, { color: activity.color }]}>Retry Video</Text>
+        </TouchableOpacity>
+      )}
+
       {/* Personalized prompt text */}
       <Text style={styles.promptText}>{activity.promptTemplate(childName)}</Text>
 
@@ -102,7 +176,11 @@ export default function ActivityPlayer({
         activeOpacity={0.85}
       >
         <Text style={styles.doneButtonText}>
-          {stepNumber === totalSteps ? '🎉 All Done!' : '✅ Mission Complete!'}
+          {activityIndex < activityStep.length - 1
+            ? '➡️ Next Activity'
+            : stepNumber === totalSteps
+              ? '🎉 All Done!'
+              : '✅ Mission Complete!'}
         </Text>
       </TouchableOpacity>
     </View>
@@ -133,6 +211,12 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     fontWeight: '500',
   },
+  subCounter: {
+    fontSize: 13,
+    color: '#666',
+    marginBottom: 6,
+    fontWeight: '600',
+  },
   emoji: {
     fontSize: 56,
     marginBottom: 4,
@@ -159,6 +243,18 @@ const styles = StyleSheet.create({
   video: {
     width: '100%',
     height: '100%',
+  },
+  retryButton: {
+    borderWidth: 2,
+    borderRadius: 24,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    marginBottom: 14,
+    backgroundColor: '#FFFFFF',
+  },
+  retryButtonText: {
+    fontSize: 16,
+    fontWeight: '700',
   },
   promptText: {
     fontSize: 18,

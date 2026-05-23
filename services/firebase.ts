@@ -2,7 +2,8 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import { getFunctions } from 'firebase/functions';
-import { getAuth, signInAnonymously, onAuthStateChanged, User } from 'firebase/auth';
+import * as FirebaseAuth from 'firebase/auth';
+import { createAsyncStorage } from '@react-native-async-storage/async-storage';
 
 const firebaseConfig = {
   apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY ?? '',
@@ -19,21 +20,43 @@ const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 export const db = getFirestore(app);
 export const storage = getStorage(app);
 export const functions = getFunctions(app);
-export const auth = getAuth(app);
+
+const appStorage = createAsyncStorage('kids-routine-coach-auth');
+
+const getReactNativePersistence = (
+  FirebaseAuth as unknown as {
+    getReactNativePersistence?: (storage: ReturnType<typeof createAsyncStorage>) => FirebaseAuth.Persistence;
+  }
+).getReactNativePersistence;
+
+export const auth = (() => {
+  try {
+    if (typeof getReactNativePersistence === 'function') {
+      return FirebaseAuth.initializeAuth(app, {
+        persistence: getReactNativePersistence(appStorage),
+      });
+    }
+
+    return FirebaseAuth.initializeAuth(app);
+  } catch {
+    // Auth may already be initialized during Fast Refresh.
+    return FirebaseAuth.getAuth(app);
+  }
+})();
 
 /**
  * Ensures the user is signed in anonymously.
  * Safe to call multiple times — no-ops if already authenticated.
  */
-export async function ensureAuth(): Promise<User> {
+export async function ensureAuth(): Promise<FirebaseAuth.User> {
   return new Promise((resolve, reject) => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    const unsubscribe = FirebaseAuth.onAuthStateChanged(auth, async (user) => {
       unsubscribe();
       if (user) {
         resolve(user);
       } else {
         try {
-          const credential = await signInAnonymously(auth);
+          const credential = await FirebaseAuth.signInAnonymously(auth);
           resolve(credential.user);
         } catch (err) {
           reject(err);

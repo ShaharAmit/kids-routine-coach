@@ -10,6 +10,7 @@ interface RoutineCardProps {
 
 export default function RoutineCard({ routine }: RoutineCardProps) {
   const activityEmojis = routine.activityStack
+    .flat()
     .map((key) => ACTIVITIES[key]?.emoji ?? '•')
     .join('  ');
 
@@ -17,6 +18,7 @@ export default function RoutineCard({ routine }: RoutineCardProps) {
   const period = hour >= 12 ? 'PM' : 'AM';
   const displayHour = hour % 12 === 0 ? 12 : hour % 12;
   const displayTime = `${displayHour}:${minute.toString().padStart(2, '0')} ${period}`;
+  const hasMultipleTimes = (routine.stepTimes?.length ?? 0) > 1;
 
   return (
     <TouchableOpacity
@@ -26,8 +28,9 @@ export default function RoutineCard({ routine }: RoutineCardProps) {
     >
       <View style={styles.header}>
         <Text style={styles.childName}>{routine.childName}</Text>
-        <Text style={styles.time}>⏰ {displayTime}</Text>
+        <Text style={styles.time}>{hasMultipleTimes ? `⏰ Starts ${displayTime}` : `⏰ ${displayTime}`}</Text>
       </View>
+      {hasMultipleTimes ? <Text style={styles.timeSub}>{routine.stepTimes?.length} timed steps</Text> : null}
       <Text style={styles.activities} numberOfLines={1}>
         {activityEmojis}
       </Text>
@@ -66,6 +69,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#4A90D9',
     fontWeight: '600',
+  },
+  timeSub: {
+    fontSize: 12,
+    color: '#64748B',
+    marginBottom: 4,
   },
   activities: {
     fontSize: 22,

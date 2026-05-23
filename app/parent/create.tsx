@@ -17,6 +17,7 @@ import { syncRoutineAssets } from '../../services/assetSync';
 import { ensureAudioForRoutine } from '../../services/tts';
 import { Routine, ActivityKey } from '../../types';
 import { ACTIVITIES, ACTIVITY_KEYS } from '../../constants/activities';
+import { ensureAuth } from '../../services/firebase';
 
 const AVATAR_OPTIONS = [
   { id: 'avatar_boy_01', label: '👦 Boy 1' },
@@ -25,8 +26,15 @@ const AVATAR_OPTIONS = [
   { id: 'avatar_girl_02', label: '👧 Girl 2' },
 ];
 
-// Demo userId — replace with Firebase Auth in production
-const DEMO_USER_ID = 'parent_uid_123';
+function addMinutes(time: string, minutesToAdd: number): string {
+  const [hourStr, minuteStr] = time.split(':');
+  const hour = Number(hourStr);
+  const minute = Number(minuteStr);
+  const total = ((hour * 60 + minute + minutesToAdd) % (24 * 60) + 24 * 60) % (24 * 60);
+  const h = String(Math.floor(total / 60)).padStart(2, '0');
+  const m = String(total % 60).padStart(2, '0');
+  return `${h}:${m}`;
+}
 
 export default function CreateRoutineScreen() {
   const [childName, setChildName] = useState('');
@@ -77,15 +85,19 @@ export default function CreateRoutineScreen() {
     setSaving(true);
 
     try {
+      const user = await ensureAuth();
       const routineId = `${childName.toLowerCase().replace(/\s+/g, '_')}_routine_${Date.now()}`;
 
       const routine: Routine = {
         id: routineId,
-        userId: DEMO_USER_ID,
+        userId: user.uid,
         childName: childName.trim(),
         avatarId,
         scheduledTime,
-        activityStack: selectedActivities,
+        activityStack: selectedActivities.map((entry) => [entry]),
+        stepTimes: selectedActivities.map((_, index) => addMinutes(scheduledTime, index * 15)),
+        tone: 'cheerful',
+        voice: 'woman',
       };
 
       // 1. Save to Firestore

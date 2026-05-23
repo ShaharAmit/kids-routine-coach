@@ -1,5 +1,5 @@
 import { httpsCallable } from 'firebase/functions';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc } from 'firebase/firestore';
 import { functions, db, ensureAuth } from './firebase';
 import { Routine, ActivityKey, AudioCacheEntry } from '../types';
 import { ACTIVITIES } from '../constants/activities';
@@ -11,6 +11,8 @@ interface GenerateTTSRequest {
   childName: string;
   activityKey: ActivityKey;
   avatarId: string;
+  tone?: Routine['tone'];
+  voice?: Routine['voice'];
 }
 
 interface GenerateTTSResponse {
@@ -30,8 +32,16 @@ export async function ensureAudioForRoutine(routine: Routine): Promise<void> {
     'generateRoutineAudio'
   );
 
-  const tasks = routine.activityStack.map(async (activityKey) => {
-    const cacheKey = buildAudioCacheKey(routine.childName, activityKey, routine.avatarId);
+  const activityKeys = routine.activityStack.flat();
+
+  const tasks = activityKeys.map(async (activityKey) => {
+    const cacheKey = buildAudioCacheKey(
+      routine.childName,
+      activityKey,
+      routine.avatarId,
+      routine.tone,
+      routine.voice
+    );
     const cacheRef = doc(db, 'audio_cache', cacheKey);
 
     // Check if audio already exists and is ready
@@ -45,15 +55,6 @@ export async function ensureAudioForRoutine(routine: Routine): Promise<void> {
 
     const text = activity.promptTemplate(routine.childName);
 
-    // Mark as pending in Firestore immediately
-    const pendingEntry: AudioCacheEntry = {
-      id: cacheKey,
-      audioUrl: '',
-      status: 'generating',
-      createdAt: Date.now(),
-    };
-    await setDoc(cacheRef, pendingEntry);
-
     try {
       console.log(`[TTS] Generating audio for: ${cacheKey}`);
       await generateTTS({
@@ -62,10 +63,11 @@ export async function ensureAudioForRoutine(routine: Routine): Promise<void> {
         childName: routine.childName,
         activityKey,
         avatarId: routine.avatarId,
+        tone: routine.tone,
+        voice: routine.voice,
       });
     } catch (err) {
       console.error(`[TTS] Failed to generate audio for ${cacheKey}:`, err);
-      await setDoc(cacheRef, { ...pendingEntry, status: 'error' });
     }
   });
 
@@ -80,8 +82,14 @@ export async function getAudioCacheForRoutine(
 ): Promise<Record<string, AudioCacheEntry>> {
   const result: Record<string, AudioCacheEntry> = {};
 
-  for (const activityKey of routine.activityStack) {
-    const cacheKey = buildAudioCacheKey(routine.childName, activityKey, routine.avatarId);
+  for (const activityKey of routine.activityStack.flat()) {
+    const cacheKey = buildAudioCacheKey(
+      routine.childName,
+      activityKey,
+      routine.avatarId,
+      routine.tone,
+      routine.voice
+    );
     const cacheRef = doc(db, 'audio_cache', cacheKey);
     const snap = await getDoc(cacheRef);
     if (snap.exists()) {

@@ -1,11 +1,14 @@
 import * as FileSystem from 'expo-file-system/legacy';
-import { db } from './firebase';
+import { db, storage, ensureAuth } from './firebase';
 import { doc, getDoc } from 'firebase/firestore';
+import { getDownloadURL, ref } from 'firebase/storage';
 import { Routine, ActivityKey } from '../types';
-import { ACTIVITIES, AVATAR_VIDEO_BASE_URL } from '../constants/activities';
+import { ACTIVITIES } from '../constants/activities';
 
 const VIDEO_DIR = `${FileSystem.documentDirectory}videos/`;
 const AUDIO_DIR = `${FileSystem.documentDirectory}audio/`;
+const MIN_VIDEO_FILE_BYTES = 16 * 1024;
+const MIN_AUDIO_FILE_BYTES = 4 * 1024;
 
 /** Ensure local cache directories exist */
 async function ensureDirs(): Promise<void> {
@@ -20,36 +23,92 @@ async function ensureDirs(): Promise<void> {
 }
 
 /** Returns the local file path for a video asset */
-export function localVideoPath(activityKey: ActivityKey): string {
-  return `${VIDEO_DIR}${activityKey}.mp4`;
+export function localVideoPath(activityKey: ActivityKey, avatarId: string): string {
+  return `${VIDEO_DIR}${avatarId}_${activityKey}.mp4`;
+}
+
+async function isValidCachedVideo(localPath: string): Promise<boolean> {
+  const info = await FileSystem.getInfoAsync(localPath);
+  if (!info.exists) return false;
+
+  // A tiny file is typically an HTML error page or partial download, not a playable MP4.
+  const size = 'size' in info && typeof info.size === 'number' ? info.size : 0;
+  return size >= MIN_VIDEO_FILE_BYTES;
 }
 
 /** Returns the local file path for a TTS audio file */
 export function localAudioPath(cacheKey: string): string {
-  return `${AUDIO_DIR}${cacheKey}.mp3`;
+  return `${AUDIO_DIR}${cacheKey}.wav`;
+}
+
+async function isValidCachedAudio(localPath: string): Promise<boolean> {
+  const info = await FileSystem.getInfoAsync(localPath);
+  if (!info.exists) return false;
+
+  const size = 'size' in info && typeof info.size === 'number' ? info.size : 0;
+  if (size < MIN_AUDIO_FILE_BYTES) return false;
+
+  try {
+    // Validate RIFF/WAVE header so stale raw PCM files are not treated as playable WAV.
+    const riffHeader = await FileSystem.readAsStringAsync(localPath, {
+      encoding: FileSystem.EncodingType.Base64,
+      position: 0,
+      length: 4,
+    });
+    const waveHeader = await FileSystem.readAsStringAsync(localPath, {
+      encoding: FileSystem.EncodingType.Base64,
+      position: 8,
+      length: 4,
+    });
+    return riffHeader === 'UklGRg==' && waveHeader === 'V0FWRQ==';
+  } catch {
+    return false;
+  }
 }
 
 /** Build the Firestore audio_cache document ID */
 export function buildAudioCacheKey(
   childName: string,
   activityKey: ActivityKey,
-  avatarId: string
+  avatarId: string,
+  tone?: Routine['tone'],
+  voice?: Routine['voice']
 ): string {
   const normalizedName = childName.toLowerCase().replace(/[^a-z0-9]/g, '_');
-  return `${normalizedName}_${activityKey}_${avatarId}`;
+  const toneKey = tone ?? 'cheerful';
+  const voiceKey = voice ?? 'woman';
+  return `${normalizedName}_${activityKey}_${avatarId}_${toneKey}_${voiceKey}`;
 }
 
 /**
  * Download a single video file if not already cached locally.
  */
 async function syncVideo(activityKey: ActivityKey, avatarId: string): Promise<void> {
-  const localPath = localVideoPath(activityKey);
-  const info = await FileSystem.getInfoAsync(localPath);
-  if (info.exists) return;
+  const localPath = localVideoPath(activityKey, avatarId);
+  const hasValidCachedVideo = await isValidCachedVideo(localPath);
+  if (hasValidCachedVideo) return;
 
-  const remoteUrl = `${AVATAR_VIDEO_BASE_URL}/${avatarId}/${activityKey}.mp4`;
+  const existing = await FileSystem.getInfoAsync(localPath);
+  if (existing.exists) {
+    await FileSystem.deleteAsync(localPath, { idempotent: true });
+  }
+
+  const remoteStoragePath = `avatars/${avatarId}/${activityKey}.mp4`;
+  const remoteUrl = await getDownloadURL(ref(storage, remoteStoragePath));
   console.log(`[AssetSync] Downloading video: ${remoteUrl}`);
-  await FileSystem.downloadAsync(remoteUrl, localPath);
+  const downloadResult = await FileSystem.downloadAsync(remoteUrl, localPath);
+
+  const status = (downloadResult as { status?: number }).status;
+  if (typeof status === 'number' && status >= 400) {
+    await FileSystem.deleteAsync(localPath, { idempotent: true });
+    throw new Error(`[AssetSync] Video download failed (${status}) for ${remoteUrl}`);
+  }
+
+  const isPlayable = await isValidCachedVideo(localPath);
+  if (!isPlayable) {
+    await FileSystem.deleteAsync(localPath, { idempotent: true });
+    throw new Error(`[AssetSync] Downloaded video is invalid or too small: ${remoteUrl}`);
+  }
 }
 
 /**
@@ -57,11 +116,28 @@ async function syncVideo(activityKey: ActivityKey, avatarId: string): Promise<vo
  */
 async function syncAudio(cacheKey: string, audioUrl: string): Promise<void> {
   const localPath = localAudioPath(cacheKey);
-  const info = await FileSystem.getInfoAsync(localPath);
-  if (info.exists) return;
+  const hasValidCachedAudio = await isValidCachedAudio(localPath);
+  if (hasValidCachedAudio) return;
+
+  const existing = await FileSystem.getInfoAsync(localPath);
+  if (existing.exists) {
+    await FileSystem.deleteAsync(localPath, { idempotent: true });
+  }
 
   console.log(`[AssetSync] Downloading audio: ${audioUrl}`);
-  await FileSystem.downloadAsync(audioUrl, localPath);
+  const downloadResult = await FileSystem.downloadAsync(audioUrl, localPath);
+
+  const status = (downloadResult as { status?: number }).status;
+  if (typeof status === 'number' && status >= 400) {
+    await FileSystem.deleteAsync(localPath, { idempotent: true });
+    throw new Error(`[AssetSync] Audio download failed (${status}) for ${audioUrl}`);
+  }
+
+  const isPlayable = await isValidCachedAudio(localPath);
+  if (!isPlayable) {
+    await FileSystem.deleteAsync(localPath, { idempotent: true });
+    throw new Error(`[AssetSync] Downloaded audio is invalid or too small: ${audioUrl}`);
+  }
 }
 
 /**
@@ -74,10 +150,12 @@ export async function syncRoutineAssets(
   routine: Routine
 ): Promise<{ missingAudioKeys: string[] }> {
   await ensureDirs();
+  await ensureAuth();
 
   const missingAudioKeys: string[] = [];
+  const activityKeys = routine.activityStack.flat();
 
-  const syncTasks = routine.activityStack.map(async (activityKey) => {
+  const syncTasks = activityKeys.map(async (activityKey) => {
     // 1. Sync video
     try {
       await syncVideo(activityKey, routine.avatarId);
@@ -86,11 +164,17 @@ export async function syncRoutineAssets(
     }
 
     // 2. Sync audio
-    const cacheKey = buildAudioCacheKey(routine.childName, activityKey, routine.avatarId);
+    const cacheKey = buildAudioCacheKey(
+      routine.childName,
+      activityKey,
+      routine.avatarId,
+      routine.tone,
+      routine.voice
+    );
     const localPath = localAudioPath(cacheKey);
-    const localInfo = await FileSystem.getInfoAsync(localPath);
+    const audioReady = await isValidCachedAudio(localPath);
 
-    if (!localInfo.exists) {
+    if (!audioReady) {
       try {
         const audioDocRef = doc(db, 'audio_cache', cacheKey);
         const audioDoc = await getDoc(audioDocRef);
@@ -116,13 +200,19 @@ export async function syncRoutineAssets(
  * Check whether all assets for a routine are available locally.
  */
 export async function areAssetsReady(routine: Routine): Promise<boolean> {
-  for (const activityKey of routine.activityStack) {
-    const videoInfo = await FileSystem.getInfoAsync(localVideoPath(activityKey));
-    if (!videoInfo.exists) return false;
+  for (const activityKey of routine.activityStack.flat()) {
+    const videoReady = await isValidCachedVideo(localVideoPath(activityKey, routine.avatarId));
+    if (!videoReady) return false;
 
-    const cacheKey = buildAudioCacheKey(routine.childName, activityKey, routine.avatarId);
-    const audioInfo = await FileSystem.getInfoAsync(localAudioPath(cacheKey));
-    if (!audioInfo.exists) return false;
+    const cacheKey = buildAudioCacheKey(
+      routine.childName,
+      activityKey,
+      routine.avatarId,
+      routine.tone,
+      routine.voice
+    );
+    const audioReady = await isValidCachedAudio(localAudioPath(cacheKey));
+    if (!audioReady) return false;
   }
   return true;
 }
@@ -131,14 +221,20 @@ export async function areAssetsReady(routine: Routine): Promise<boolean> {
  * Delete all cached assets for a routine (e.g. when routine is deleted).
  */
 export async function clearRoutineAssets(routine: Routine): Promise<void> {
-  for (const activityKey of routine.activityStack) {
-    const videoPath = localVideoPath(activityKey);
+  for (const activityKey of routine.activityStack.flat()) {
+    const videoPath = localVideoPath(activityKey, routine.avatarId);
     const videoInfo = await FileSystem.getInfoAsync(videoPath);
     if (videoInfo.exists) {
       await FileSystem.deleteAsync(videoPath, { idempotent: true });
     }
 
-    const cacheKey = buildAudioCacheKey(routine.childName, activityKey, routine.avatarId);
+    const cacheKey = buildAudioCacheKey(
+      routine.childName,
+      activityKey,
+      routine.avatarId,
+      routine.tone,
+      routine.voice
+    );
     const audioPath = localAudioPath(cacheKey);
     const audioInfo = await FileSystem.getInfoAsync(audioPath);
     if (audioInfo.exists) {

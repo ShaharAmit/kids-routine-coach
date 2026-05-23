@@ -1,7 +1,52 @@
 import { useState, useEffect } from 'react';
 import { doc, getDoc, collection, query, where, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { Routine } from '../types';
+import { ActivityKey, ActivityStep, Routine, normalizeActivityStack, normalizeStepTimes } from '../types';
+
+type FirestoreStep = {
+  activities: ActivityKey[];
+};
+
+function serializeActivityStackForFirestore(stack: ActivityStep[]): FirestoreStep[] {
+  return stack.map((step) => ({ activities: [...step] }));
+}
+
+function deserializeActivityStackFromFirestore(rawStack: unknown): ActivityStep[] {
+  if (!Array.isArray(rawStack)) return [];
+
+  if (rawStack.length === 0) return [];
+  const first = rawStack[0] as unknown;
+
+  // Backward compatibility for local/in-memory shapes that may still be string[] or string[][].
+  if (typeof first === 'string' || Array.isArray(first)) {
+    return normalizeActivityStack(rawStack as ActivityKey[] | ActivityStep[]);
+  }
+
+  const asObjects = rawStack as Array<{ activities?: unknown }>;
+  return asObjects
+    .map((entry) => (Array.isArray(entry.activities) ? (entry.activities as ActivityKey[]) : []))
+    .filter((step) => step.length > 0);
+}
+
+function normalizeRoutine(raw: Record<string, unknown>, id: string): Routine {
+  const stack = deserializeActivityStackFromFirestore(raw.activityStack ?? []);
+  const candidate = raw as Partial<Routine>;
+  const scheduledTime = candidate.scheduledTime ?? '08:00';
+
+  return {
+    userId: candidate.userId ?? '',
+    childName: candidate.childName ?? '',
+    childAge: candidate.childAge,
+    avatarId: candidate.avatarId ?? 'avatar_boy_01',
+    scheduledTime,
+    stepTimes: normalizeStepTimes(candidate.stepTimes, stack, scheduledTime),
+    tone: candidate.tone,
+    voice: candidate.voice,
+    notificationId: candidate.notificationId,
+    id,
+    activityStack: stack,
+  };
+}
 
 /**
  * Subscribe to a single routine document by ID.
@@ -20,7 +65,7 @@ export function useRoutine(routineId: string) {
       routineRef,
       (snap) => {
         if (snap.exists()) {
-          setRoutine({ id: snap.id, ...snap.data() } as Routine);
+          setRoutine(normalizeRoutine(snap.data() as Record<string, unknown>, snap.id));
         } else {
           setRoutine(null);
         }
@@ -48,13 +93,19 @@ export function useUserRoutines(userId: string) {
   const [error, setError] = useState<Error | null>(null);
 
   useEffect(() => {
-    if (!userId) return;
+    if (!userId) {
+      setLoading(false);
+      setRoutines([]);
+      return;
+    }
 
     const q = query(collection(db, 'routines'), where('userId', '==', userId));
     const unsubscribe = onSnapshot(
       q,
       (snap) => {
-        const data = snap.docs.map((d) => ({ id: d.id, ...d.data() } as Routine));
+        const data = snap.docs.map((d) =>
+          normalizeRoutine(d.data() as Record<string, unknown>, d.id)
+        );
         setRoutines(data);
         setLoading(false);
       },
@@ -77,7 +128,11 @@ export function useUserRoutines(userId: string) {
 export async function saveRoutine(routine: Routine): Promise<void> {
   const { id, ...data } = routine;
   const routineRef = doc(db, 'routines', id);
-  await setDoc(routineRef, data, { merge: true });
+  const firestoreData = {
+    ...data,
+    activityStack: serializeActivityStackForFirestore(routine.activityStack),
+  };
+  await setDoc(routineRef, firestoreData, { merge: true });
 }
 
 /**

@@ -5,16 +5,17 @@ import {
   Text,
   TouchableOpacity,
   ActivityIndicator,
-  SafeAreaView,
   StatusBar,
   Alert,
 } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoutine } from '../../hooks/useRoutine';
 import ActivityPlayer from '../../components/ActivityPlayer';
 import { areAssetsReady, syncRoutineAssets } from '../../services/assetSync';
-import { ActivityKey } from '../../types';
-import { ACTIVITIES } from '../../constants/activities';
+import { ensureAudioForRoutine } from '../../services/tts';
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export default function RoutineScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -41,8 +42,22 @@ export default function RoutineScreen() {
           if (missingAudioKeys.length === 0) {
             setAssetsReady(true);
           } else {
-            // Some audio is still generating — proceed anyway (video only)
+            // Kick off generation for routines created before audio existed,
+            // then retry one sync pass to fetch anything that is now ready.
             console.warn('[RoutineScreen] Missing audio keys:', missingAudioKeys);
+            await ensureAudioForRoutine(routine!);
+
+            let stillMissing = missingAudioKeys;
+            for (let attempt = 1; attempt <= 4; attempt += 1) {
+              await wait(1500);
+              const retry = await syncRoutineAssets(routine!);
+              stillMissing = retry.missingAudioKeys;
+              if (stillMissing.length === 0) break;
+            }
+
+            if (stillMissing.length > 0) {
+              console.warn('[RoutineScreen] Audio still pending after retries:', stillMissing);
+            }
             setAssetsReady(true);
           }
         }
@@ -114,7 +129,7 @@ export default function RoutineScreen() {
   }
 
   // ── Active Step ───────────────────────────────────────────────────────────
-  const currentActivityKey = routine.activityStack[currentStepIndex] as ActivityKey;
+  const currentActivityStep = routine.activityStack[currentStepIndex] ?? [];
 
   return (
     <SafeAreaView style={styles.container}>
@@ -143,7 +158,7 @@ export default function RoutineScreen() {
       {assetsReady && (
         <ActivityPlayer
           key={currentStepIndex} // Re-mounts on each step change to reset media
-          activityKey={currentActivityKey}
+          activityStep={currentActivityStep}
           childName={routine.childName}
           avatarId={routine.avatarId}
           stepNumber={currentStepIndex + 1}
