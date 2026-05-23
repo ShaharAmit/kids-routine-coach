@@ -50,7 +50,9 @@ export default function HomeScreen() {
   const [userId, setUserId] = useState('');
   const [cacheStage, setCacheStage] = useState('idle');
   const [menuVisible, setMenuVisible] = useState(false);
+  const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [routinePickerSegment, setRoutinePickerSegment] = useState<'morning' | 'evening' | null>(null);
+  const headerMenuButtonRef = useRef<any>(null);
   const menuAnim = useRef(new Animated.Value(0)).current;
   const { routines, loading, error } = useUserRoutines(userId);
 
@@ -151,7 +153,14 @@ export default function HomeScreen() {
     setRoutinePickerSegment(segment);
   };
 
+  const measureMenuAnchor = () => {
+    headerMenuButtonRef.current?.measureInWindow((x: number, y: number, width: number, height: number) => {
+      setMenuAnchor({ x, y, width, height });
+    });
+  };
+
   const openMenu = () => {
+    measureMenuAnchor();
     setMenuVisible(true);
     menuAnim.setValue(0);
     Animated.timing(menuAnim, {
@@ -167,7 +176,10 @@ export default function HomeScreen() {
       duration: 130,
       useNativeDriver: true,
     }).start(({ finished }) => {
-      if (finished) setMenuVisible(false);
+      if (finished) {
+        setMenuVisible(false);
+        setMenuAnchor(null);
+      }
     });
   };
 
@@ -198,6 +210,7 @@ export default function HomeScreen() {
           headerTitleStyle: { fontFamily: roundedFontBold, fontSize: 17 },
           headerRight: () => (
             <TouchableOpacity
+              ref={headerMenuButtonRef}
               style={styles.headerMenuButton}
               onPress={() => (menuVisible ? closeMenu() : openMenu())}
               activeOpacity={0.85}
@@ -222,30 +235,34 @@ export default function HomeScreen() {
         <Text style={styles.morningSubtitle}>Let's start the day!</Text>
 
         <View style={styles.sunGraphic}>
-          <View style={styles.sunGlow} />
-          {Array.from({ length: 10 }).map((_, index) => (
+          {Array.from({ length: 14 }).map((_, index) => (
             <View
               key={`ray-${index}`}
               style={[
                 styles.sunRay,
                 {
-                  transform: [{ rotate: `${index * 36}deg` }, { translateY: -60 }],
-                  width: index % 2 === 0 ? 12 : 10,
-                  height: index % 3 === 0 ? 34 : 28,
-                  opacity: index % 4 === 0 ? 0.95 : 0.85,
+                  transform: [
+                    { rotate: `${index * 25.7 + (index % 2 === 0 ? -3 : 3)}deg` },
+                    { translateY: -72 },
+                  ],
+                  borderLeftWidth: index % 2 === 0 ? 8 : 7,
+                  borderRightWidth: index % 2 === 0 ? 8 : 7,
+                  borderBottomWidth: index % 3 === 0 ? 34 : 28,
+                  borderLeftColor: 'transparent',
+                  borderRightColor: 'transparent',
+                  borderTopColor: 'transparent',
+                  borderBottomColor: index % 2 === 0 ? '#F9C45D' : '#F6B94A',
+                  opacity: index % 5 === 0 ? 0.98 : 0.9,
                 },
               ]}
             />
           ))}
           <View style={styles.sunFaceCircle}>
             <View style={styles.sunFaceEyesRow}>
-              <View style={styles.sunEye} />
-              <View style={[styles.sunEye, styles.sunEyeWink]} />
+              <View style={[styles.sunEye, styles.sunEyeSoft]} />
+              <View style={[styles.sunEye, styles.sunEyeSoft]} />
             </View>
-            <View style={styles.sunNose} />
             <View style={styles.sunSmile} />
-            <View style={styles.sunCheekLeft} />
-            <View style={styles.sunCheekRight} />
           </View>
         </View>
 
@@ -280,41 +297,51 @@ export default function HomeScreen() {
         </View>
       ) : null}
 
-      {menuVisible ? (
-        <Animated.View style={[styles.menuPopover, { top: topInset + 54 }, menuAnimatedStyle]}>
-          <Text style={styles.menuTitle}>Menu</Text>
-
-          <TouchableOpacity
-            style={styles.menuItem}
-            onPress={() => {
-              closeMenu();
-              router.push('/settings' as never);
-            }}
+      <Modal visible={menuVisible} transparent animationType="none" onRequestClose={closeMenu}>
+        <Pressable style={styles.menuOverlayFull} onPress={closeMenu}>
+          <Animated.View
+            style={[
+              styles.menuPopover,
+              menuAnchor
+                ?  { top: topInset + 50, right: 45 }
+                : { top: topInset + 44, right: 12 },
+              menuAnimatedStyle,
+            ]}
           >
-            <Text style={styles.menuItemText}>Settings</Text>
-          </TouchableOpacity>
+            <Text style={styles.menuTitle}>Menu</Text>
 
-          <TouchableOpacity
-            style={styles.menuItem}
-            onPress={() => {
-              closeMenu();
-              router.push('/onboarding/questionnaire' as never);
-            }}
-          >
-            <Text style={styles.menuItemText}>Questionnaire</Text>
-          </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={() => {
+                closeMenu();
+                router.push('/settings' as never);
+              }}
+            >
+              <Text style={styles.menuItemText}>Settings</Text>
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.menuItem}
-            onPress={() => {
-              closeMenu();
-              router.push('/parent/create');
-            }}
-          >
-            <Text style={styles.menuItemText}>Add Routine</Text>
-          </TouchableOpacity>
-        </Animated.View>
-      ) : null}
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={() => {
+                closeMenu();
+                router.push('/onboarding/questionnaire' as never);
+              }}
+            >
+              <Text style={styles.menuItemText}>Questionnaire</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.menuItem}
+              onPress={() => {
+                closeMenu();
+                router.push('/parent/create');
+              }}
+            >
+              <Text style={styles.menuItemText}>Add Routine</Text>
+            </TouchableOpacity>
+          </Animated.View>
+        </Pressable>
+      </Modal>
 
       <Modal
         visible={routinePickerSegment !== null}
@@ -448,90 +475,53 @@ const styles = StyleSheet.create({
     fontFamily: roundedFont,
   },
   sunGraphic: {
-    width: 156,
-    height: 156,
+    width: 162,
+    height: 162,
     marginTop: 12,
     marginBottom: 14,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  sunGlow: {
-    position: 'absolute',
-    width: 132,
-    height: 132,
-    borderRadius: 66,
-    backgroundColor: '#FFF4B5',
-    opacity: 0.45,
-  },
   sunRay: {
     position: 'absolute',
-    width: 12,
-    height: 26,
-    borderRadius: 8,
-    backgroundColor: '#F9C45D',
+    width: 0,
+    height: 0,
+    backgroundColor: 'transparent',
+    borderStyle: 'solid',
   },
   sunFaceCircle: {
-    width: 106,
-    height: 106,
-    borderRadius: 53,
-    backgroundColor: '#FFD56A',
+    width: 108,
+    height: 108,
+    borderRadius: 54,
+    backgroundColor: '#FFE07D',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
-    borderColor: '#E8B34B',
+    borderColor: '#EAB74B',
   },
   sunFaceEyesRow: {
-    width: 44,
+    width: 50,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: 8,
-  },
-  sunEye: {
-    width: 10,
-    height: 10,
-    borderRadius: 6,
-    backgroundColor: '#7A5B2D',
-  },
-  sunEyeWink: {
-    height: 3,
     marginTop: 4,
   },
-  sunNose: {
-    width: 5,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: '#9A773F',
-    marginTop: 8,
-    opacity: 0.45,
+  sunEye: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: '#7A5B2D',
+  },
+  sunEyeSoft: {
+    opacity: 0.95,
   },
   sunSmile: {
-    width: 38,
-    height: 20,
+    width: 40,
+    height: 18,
     borderBottomWidth: 4,
     borderColor: '#7A5B2D',
-    borderBottomLeftRadius: 22,
-    borderBottomRightRadius: 22,
-    marginTop: 8,
-  },
-  sunCheekLeft: {
-    position: 'absolute',
-    width: 18,
-    height: 14,
-    borderRadius: 9,
-    backgroundColor: '#F6B07A',
-    opacity: 0.72,
-    left: 14,
-    top: 56,
-  },
-  sunCheekRight: {
-    position: 'absolute',
-    width: 18,
-    height: 14,
-    borderRadius: 9,
-    backgroundColor: '#F6B07A',
-    opacity: 0.72,
-    right: 14,
-    top: 56,
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+    marginTop: 10,
   },
   morningCta: {
     borderRadius: 999,
@@ -622,14 +612,17 @@ const styles = StyleSheet.create({
   },
   menuPopover: {
     position: 'absolute',
-    right: 16,
-    minWidth: 190,
+    minWidth: 176,
     zIndex: 30,
     borderRadius: 18,
     backgroundColor: '#FBFAF3',
     borderWidth: 1,
     borderColor: '#E4DDC7',
-    padding: 14,
+    padding: 12,
+  },
+  menuOverlayFull: {
+    flex: 1,
+    backgroundColor: 'transparent',
   },
   menuOverlay: {
     flex: 1,
