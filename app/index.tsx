@@ -303,8 +303,11 @@ export default function HomeScreen() {
             style={[
               styles.menuPopover,
               menuAnchor
-                ?  { top: topInset + 50, right: 45 }
-                : { top: topInset + 44, right: 12 },
+                ? {
+                    top: menuAnchor.y + menuAnchor.height,
+                    left: Math.max(menuAnchor.x - 166, 12),
+                  }
+                : { top: topInset + 50, right: 45 },
               menuAnimatedStyle,
             ]}
           >
