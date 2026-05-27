@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   StyleSheet,
   View,
@@ -8,23 +8,16 @@ import {
   ScrollView,
   Alert,
   ActivityIndicator,
-  Platform,
 } from 'react-native';
 import { router } from 'expo-router';
 import { saveRoutine } from '../../hooks/useRoutine';
 import { scheduleRoutineNotification } from '../../services/notifications';
 import { syncRoutineAssets } from '../../services/assetSync';
 import { ensureAudioForRoutine } from '../../services/tts';
-import { Routine, ActivityKey } from '../../types';
+import { Routine, ActivityKey, ToneOption, VoiceOption } from '../../types';
 import { ACTIVITIES, ACTIVITY_KEYS } from '../../constants/activities';
 import { ensureAuth } from '../../services/firebase';
-
-const AVATAR_OPTIONS = [
-  { id: 'avatar_boy_01', label: '👦 Boy 1' },
-  { id: 'avatar_boy_02', label: '👦 Boy 2' },
-  { id: 'avatar_girl_01', label: '👧 Girl 1' },
-  { id: 'avatar_girl_02', label: '👧 Girl 2' },
-];
+import { getChildProfile } from '../../services/profile';
 
 function addMinutes(time: string, minutesToAdd: number): string {
   const [hourStr, minuteStr] = time.split(':');
@@ -38,7 +31,11 @@ function addMinutes(time: string, minutesToAdd: number): string {
 
 export default function CreateRoutineScreen() {
   const [childName, setChildName] = useState('');
+  const [childAge, setChildAge] = useState<number | undefined>(undefined);
+  const [childProfileLoaded, setChildProfileLoaded] = useState(false);
   const [avatarId, setAvatarId] = useState('avatar_boy_01');
+  const [voice, setVoice] = useState<VoiceOption>('woman');
+  const [tone, setTone] = useState<ToneOption>('cheerful');
   const [scheduledTime, setScheduledTime] = useState('08:00');
   const [selectedActivities, setSelectedActivities] = useState<ActivityKey[]>([
     'brush_teeth',
@@ -46,6 +43,41 @@ export default function CreateRoutineScreen() {
     'eat_breakfast',
   ]);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadSingleChildProfile() {
+      const profile = await getChildProfile();
+      if (!mounted) return;
+
+      if (!profile) {
+        Alert.alert('Finish setup first', 'Please complete the questionnaire to set up your child first.', [
+          { text: 'Go to setup', onPress: () => router.replace('/onboarding/questionnaire') },
+        ]);
+        return;
+      }
+
+      setChildName(profile.childName);
+      setChildAge(profile.age);
+      setAvatarId(profile.avatarId);
+      setVoice(profile.voice);
+      setTone(profile.tone);
+      setScheduledTime(profile.scheduledTime);
+      setChildProfileLoaded(true);
+    }
+
+    loadSingleChildProfile().catch((err) => {
+      console.warn('[CreateRoutine] failed to load child profile:', err);
+      if (mounted) {
+        Alert.alert('Load failed', 'Could not load child profile. Please try again.');
+      }
+    });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const toggleActivity = useCallback((key: ActivityKey) => {
     setSelectedActivities((prev) =>
@@ -69,8 +101,8 @@ export default function CreateRoutineScreen() {
   };
 
   const handleSave = useCallback(async () => {
-    if (!childName.trim()) {
-      Alert.alert('Missing Info', "Please enter your child's name.");
+    if (!childProfileLoaded || !childName.trim()) {
+      Alert.alert('Missing child profile', 'Please complete child setup first.');
       return;
     }
     if (selectedActivities.length === 0) {
@@ -92,12 +124,13 @@ export default function CreateRoutineScreen() {
         id: routineId,
         userId: user.uid,
         childName: childName.trim(),
+        childAge,
         avatarId,
         scheduledTime,
         activityStack: selectedActivities.map((entry) => [entry]),
         stepTimes: selectedActivities.map((_, index) => addMinutes(scheduledTime, index * 15)),
-        tone: 'cheerful',
-        voice: 'woman',
+        tone,
+        voice,
       };
 
       // 1. Save to Firestore
@@ -129,31 +162,14 @@ export default function CreateRoutineScreen() {
     } finally {
       setSaving(false);
     }
-  }, [childName, avatarId, scheduledTime, selectedActivities]);
+  }, [avatarId, childAge, childName, childProfileLoaded, scheduledTime, selectedActivities, tone, voice]);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.sectionTitle}>Child's Name</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="e.g. Liam"
-        value={childName}
-        onChangeText={setChildName}
-        maxLength={30}
-        autoCapitalize="words"
-      />
-
-      <Text style={styles.sectionTitle}>Avatar</Text>
-      <View style={styles.avatarRow}>
-        {AVATAR_OPTIONS.map((opt) => (
-          <TouchableOpacity
-            key={opt.id}
-            style={[styles.avatarChip, avatarId === opt.id && styles.avatarChipSelected]}
-            onPress={() => setAvatarId(opt.id)}
-          >
-            <Text style={styles.avatarChipText}>{opt.label}</Text>
-          </TouchableOpacity>
-        ))}
+      <Text style={styles.sectionTitle}>Child</Text>
+      <View style={styles.childSummaryCard}>
+        <Text style={styles.childSummaryName}>{childName || 'Not configured yet'}</Text>
+        <Text style={styles.childSummaryHint}>Routines are always saved for your configured child profile.</Text>
       </View>
 
       <Text style={styles.sectionTitle}>Routine Time (24h format)</Text>
@@ -280,27 +296,23 @@ const styles = StyleSheet.create({
     borderColor: '#E0E0E0',
     color: '#222',
   },
-  avatarRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
+  childSummaryCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#E0E0E0',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
   },
-  avatarChip: {
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 20,
-    borderWidth: 2,
-    borderColor: '#DDD',
-    backgroundColor: '#FFF',
+  childSummaryName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#222',
   },
-  avatarChipSelected: {
-    borderColor: '#4A90D9',
-    backgroundColor: '#E3F2FD',
-  },
-  avatarChipText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#333',
+  childSummaryHint: {
+    marginTop: 4,
+    fontSize: 13,
+    color: '#6B7280',
   },
   activityGrid: {
     flexDirection: 'row',

@@ -53,46 +53,27 @@ export default function HomeScreen() {
   const [cacheStage, setCacheStage] = useState('idle');
   const [menuVisible, setMenuVisible] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
-  const [routinePickerSegment, setRoutinePickerSegment] = useState<'morning' | 'evening' | null>(null);
   const headerMenuButtonRef = useRef<any>(null);
   const menuAnim = useRef(new Animated.Value(0)).current;
   const { routines, loading, error } = useUserRoutines(userId);
 
   const primaryRoutine = routines[0] ?? null;
 
-  const segmentCounts = useMemo(() => {
-    if (!primaryRoutine) return { morning: 0, evening: 0 };
-
-    const stepTimes = Array.from({ length: primaryRoutine.activityStack.length }, (_, index) =>
-      primaryRoutine.stepTimes?.[index] ?? primaryRoutine.scheduledTime
-    );
-
-    let morning = 0;
-    let evening = 0;
-
-    stepTimes.forEach((time) => {
-      if (isMorningTime(time)) {
-        morning += 1;
-      } else {
-        evening += 1;
-      }
-    });
-
-    return { morning, evening };
-  }, [primaryRoutine]);
-
-  const routinesForSegment = useMemo(() => {
-    if (!routinePickerSegment) return [];
-
-    return routines.filter((routine) => {
+  const routinesBySegment = useMemo(() => {
+    const morning = routines.filter((routine) => {
       const stepTimes = Array.from({ length: routine.activityStack.length }, (_, index) =>
         routine.stepTimes?.[index] ?? routine.scheduledTime
       );
-      return stepTimes.some((time) =>
-        routinePickerSegment === 'morning' ? isMorningTime(time) : !isMorningTime(time)
-      );
+      return stepTimes.some((time) => isMorningTime(time));
     });
-  }, [routinePickerSegment, routines]);
+    const evening = routines.filter((routine) => {
+      const stepTimes = Array.from({ length: routine.activityStack.length }, (_, index) =>
+        routine.stepTimes?.[index] ?? routine.scheduledTime
+      );
+      return stepTimes.some((time) => !isMorningTime(time));
+    });
+    return { morning, evening };
+  }, [routines]);
 
   useEffect(() => {
     const unsubscribe = subscribeAssetCacheStatus((next) => {
@@ -152,7 +133,16 @@ export default function HomeScreen() {
       return;
     }
 
-    setRoutinePickerSegment(segment);
+    const targetRoutine = (segment === 'morning' ? routinesBySegment.morning[0] : routinesBySegment.evening[0])
+      ?? primaryRoutine;
+
+    if (!targetRoutine) {
+      Alert.alert('No routines found', 'Please create a routine first.');
+      router.push('/parent/create');
+      return;
+    }
+
+    router.push(`/routine/${targetRoutine.id}?segment=${segment}` as never);
   };
 
   const measureMenuAnchor = () => {
@@ -477,39 +467,6 @@ export default function HomeScreen() {
         </Pressable>
       </Modal>
 
-      <Modal
-        visible={routinePickerSegment !== null}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setRoutinePickerSegment(null)}
-      >
-        <Pressable style={styles.menuOverlay} onPress={() => setRoutinePickerSegment(null)}>
-          <Pressable style={styles.menuSheet} onPress={() => {}}>
-            <Text style={styles.menuTitle}>
-              {routinePickerSegment === 'evening' ? 'Evening Routines' : 'Morning Routines'}
-            </Text>
-
-            {routinesForSegment.length === 0 ? (
-              <Text style={styles.emptyRoutinesText}>No routines in this time range yet.</Text>
-            ) : (
-              routinesForSegment.map((routine) => (
-                <TouchableOpacity
-                  key={routine.id}
-                  style={styles.menuItem}
-                  onPress={() => {
-                    const segment = routinePickerSegment;
-                    setRoutinePickerSegment(null);
-                    if (!segment) return;
-                    router.push(`/routine/${routine.id}?segment=${segment}` as never);
-                  }}
-                >
-                  <Text style={styles.menuItemText}>{routine.childName}</Text>
-                </TouchableOpacity>
-              ))
-            )}
-          </Pressable>
-        </Pressable>
-      </Modal>
     </View>
   );
 }

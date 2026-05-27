@@ -242,3 +242,18 @@ export async function clearRoutineAssets(routine: Routine): Promise<void> {
     }
   }
 }
+
+/**
+ * Delete all cached routine media assets (video/audio) on device.
+ */
+export async function clearAllRoutineAssets(): Promise<void> {
+  const videoDirInfo = await FileSystem.getInfoAsync(VIDEO_DIR);
+  if (videoDirInfo.exists) {
+    await FileSystem.deleteAsync(VIDEO_DIR, { idempotent: true });
+  }
+
+  const audioDirInfo = await FileSystem.getInfoAsync(AUDIO_DIR);
+  if (audioDirInfo.exists) {
+    await FileSystem.deleteAsync(AUDIO_DIR, { idempotent: true });
+  }
+}

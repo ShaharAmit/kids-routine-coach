@@ -4,7 +4,7 @@ import { getDownloadURL, getMetadata, ref } from 'firebase/storage';
 import { storage } from './firebase';
 import { ensureAudioForRoutine } from './tts';
 import { Routine } from '../types';
-import { syncRoutineAssets } from './assetSync';
+import { clearAllRoutineAssets, syncRoutineAssets } from './assetSync';
 
 const WELCOME_VIDEO_STORAGE_PATH = 'avatars/default/welcome.mp4';
 
@@ -195,4 +195,23 @@ export async function preloadRoutineAssetsInBackground(routine: Routine): Promis
     emitStatus();
     isWarmupRunning = false;
   }
+}
+
+/**
+ * Clears all locally cached media and metadata.
+ */
+export async function clearAllLocalCachedAssets(): Promise<void> {
+  await clearAllRoutineAssets();
+
+  const welcomeDirInfo = await FileSystem.getInfoAsync(WELCOME_DIR);
+  if (welcomeDirInfo.exists) {
+    await FileSystem.deleteAsync(WELCOME_DIR, { idempotent: true });
+  }
+
+  await AsyncStorage.removeItem(WELCOME_VIDEO_META_KEY);
+
+  status.stage = 'idle';
+  status.total = 0;
+  status.ready = 0;
+  emitStatus();
 }

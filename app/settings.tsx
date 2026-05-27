@@ -11,10 +11,12 @@ import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { getChildProfile, clearChildProfile } from '../services/profile';
 import {
+  clearAllLocalCachedAssets,
   preloadRoutineAssetsInBackground,
   subscribeAssetCacheStatus,
 } from '../services/assetCacheService';
 import { Routine } from '../types';
+import { clearDebugHomeAccess } from '../services/debugFlow';
 
 export default function SettingsScreen() {
   const [profileName, setProfileName] = useState('');
@@ -116,6 +118,33 @@ export default function SettingsScreen() {
     ]);
   };
 
+  const handleCleanLocalData = async () => {
+    Alert.alert(
+      'Clean local saved data?',
+      'This clears child profile and all downloaded media cache on this device.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clean',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await clearChildProfile();
+              await clearAllLocalCachedAssets();
+              clearDebugHomeAccess();
+              Alert.alert('Cleaned', 'Local saved data was cleared. You will be redirected to onboarding.', [
+                { text: 'OK', onPress: () => router.replace('/loading' as never) },
+              ]);
+            } catch (err) {
+              console.warn('[Settings] clean local data failed:', err);
+              Alert.alert('Failed', 'Could not clean local data right now.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -154,6 +183,10 @@ export default function SettingsScreen() {
 
       <TouchableOpacity style={styles.dangerBtn} onPress={handleResetSetup}>
         <Text style={styles.dangerBtnText}>Reset Setup</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity style={styles.dangerBtn} onPress={handleCleanLocalData}>
+        <Text style={styles.dangerBtnText}>Clean Local Saved Data</Text>
       </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
