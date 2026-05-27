@@ -25,6 +25,7 @@ export default function RoutineScreen() {
   const insets = useSafeAreaInsets();
   const topInset = insets.top + (Platform.OS === 'android' ? 8 : 0);
   const { id, segment } = useLocalSearchParams<{ id: string; segment?: 'morning' | 'evening' }>();
+  const isEvening = segment === 'evening';
   const { routine, loading, error } = useRoutine(id ?? '');
 
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
@@ -252,16 +253,19 @@ export default function RoutineScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={[styles.container, isEvening && styles.containerEvening]}>
       <StatusBar barStyle="dark-content" />
 
       {/* Top bar with routine name and exit */}
-      <View style={styles.topBar}>
+      <View style={[styles.topBar, isEvening && styles.topBarEvening]}>
         <View style={{ width: 36 }} />
         <Text style={styles.routineTitle} numberOfLines={1}>
           {routine.childName}'s Routine
         </Text>
-        <TouchableOpacity style={styles.menuButton} onPress={() => setMenuVisible(true)}>
+        <TouchableOpacity
+          style={[styles.menuButton, isEvening && styles.menuButtonEvening]}
+          onPress={() => setMenuVisible(true)}
+        >
           <Text style={styles.menuIcon}>≡</Text>
         </TouchableOpacity>
       </View>
@@ -335,6 +339,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F4EEDB',
   },
+  containerEvening: {
+    backgroundColor: '#E6F1FF',
+  },
   centered: {
     flex: 1,
     alignItems: 'center',
@@ -374,6 +381,10 @@ const styles = StyleSheet.create({
     borderBottomColor: '#E6DDC0',
     backgroundColor: '#F7F1DF',
   },
+  topBarEvening: {
+    borderBottomColor: '#C6DDF8',
+    backgroundColor: '#DCEBFF',
+  },
   menuButton: {
     width: 36,
     height: 36,
@@ -381,6 +392,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#EFE8D3',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  menuButtonEvening: {
+    backgroundColor: '#CFE3FD',
   },
   menuIcon: {
     fontSize: 19,
