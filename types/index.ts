@@ -6,7 +6,11 @@ export type ActivityKey =
   | 'wash_face'
   | 'comb_hair'
   | 'put_shoes_on'
-  | 'drink_water';
+  | 'drink_water'
+  | 'tidy_room'
+  | 'use_toilet'
+  | 'read_book'
+  | 'put_on_pajamas';
 
 export type ToneOption = 'cheerful' | 'encouraging' | 'calm';
 export type VoiceOption = 'woman' | 'man';

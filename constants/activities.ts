@@ -1,5 +1,44 @@
 import { ActivityMeta } from '../types';
 
+export interface ActivityConfig {
+  id: string;
+  uiTitle: string;
+  uiEmoji: string;
+  defaultTTSPhrase: string; // Used by Cloud Function for Gemini TTS
+  avatarVideoRef: string;   // Reference to fetch from CDN -> FileSystem.documentDirectory
+}
+
+export const ADDITIONAL_ACTIVITIES: ActivityConfig[] = [
+  {
+    id: 'tidy_room',
+    uiTitle: 'Tidy Room',
+    uiEmoji: '🧸',
+    defaultTTSPhrase: 'Great job {childName}! Now, let\'s tidy up our room.',
+    avatarVideoRef: 'avatar_loop_tidy_room.mp4',
+  },
+  {
+    id: 'use_toilet',
+    uiTitle: 'Use Toilet',
+    uiEmoji: '🚽',
+    defaultTTSPhrase: 'Time to go to the potty, {childName}!',
+    avatarVideoRef: 'avatar_loop_use_toilet.mp4',
+  },
+  {
+    id: 'read_book',
+    uiTitle: 'Read a Book',
+    uiEmoji: '📚',
+    defaultTTSPhrase: 'Let\'s read a fun book together, {childName}.',
+    avatarVideoRef: 'avatar_loop_read_book.mp4',
+  },
+  {
+    id: 'put_on_pajamas',
+    uiTitle: 'Put on Pajamas',
+    uiEmoji: '👕',
+    defaultTTSPhrase: 'Time to get cozy, {childName}. Let\'s put on our pajamas!',
+    avatarVideoRef: 'avatar_loop_pajamas.mp4',
+  },
+];
+
 export const ACTIVITIES: Record<string, ActivityMeta> = {
   brush_teeth: {
     key: 'brush_teeth',
@@ -64,6 +103,38 @@ export const ACTIVITIES: Record<string, ActivityMeta> = {
     videoFile: 'drink_water.mp4',
     emoji: '💧',
     color: '#29B6F6',
+  },
+  tidy_room: {
+    key: 'tidy_room',
+    label: 'Tidy Room',
+    promptTemplate: (name) => `Great job ${name}! Now, let us tidy up our room.`,
+    videoFile: 'avatar_loop_tidy_room.mp4',
+    emoji: '🧸',
+    color: '#7E57C2',
+  },
+  use_toilet: {
+    key: 'use_toilet',
+    label: 'Use Toilet',
+    promptTemplate: (name) => `Time to go to the potty, ${name}!`,
+    videoFile: 'avatar_loop_use_toilet.mp4',
+    emoji: '🚽',
+    color: '#26A69A',
+  },
+  read_book: {
+    key: 'read_book',
+    label: 'Read a Book',
+    promptTemplate: (name) => `Let us read a fun book together, ${name}.`,
+    videoFile: 'avatar_loop_read_book.mp4',
+    emoji: '📚',
+    color: '#5C6BC0',
+  },
+  put_on_pajamas: {
+    key: 'put_on_pajamas',
+    label: 'Put on Pajamas',
+    promptTemplate: (name) => `Time to get cozy, ${name}. Let us put on our pajamas!`,
+    videoFile: 'avatar_loop_pajamas.mp4',
+    emoji: '👕',
+    color: '#EC407A',
   },
 };
 
