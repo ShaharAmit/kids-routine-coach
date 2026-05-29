@@ -1,5 +1,15 @@
 {
   "projects": {
     "default": "kids-routine-coach-app"
-  }
+  },
+  "targets": {
+    "kids-routine-coach-app": {
+      "hosting": {
+        "website": [
+          "kids-routine-coach-app"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }

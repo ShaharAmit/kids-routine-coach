@@ -56,6 +56,25 @@ kids-routine-coach/
 git clone https://github.com/YOUR_USERNAME/kids-routine-coach.git
 cd kids-routine-coach
 npm install
+
+### Website (kidocoach.app)
+
+The repository also includes a dedicated web landing site under `website/`.
+
+```bash
+cd website
+cp .env.example .env
+npm install
+npm run dev
+```
+
+Website deployment target is configured in `firebase.json` as `hosting:website`.
+Before first deploy, map the hosting target to your Firebase Hosting site:
+
+```bash
+firebase target:apply hosting website <your-hosting-site-id>
+firebase deploy --only hosting:website
+```
 ```
 
 ### 2. Configure Firebase

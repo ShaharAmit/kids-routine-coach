@@ -12,5 +12,11 @@ service cloud.firestore {
       allow read: if true;
       allow write: if false; // Written only by Cloud Functions (admin SDK)
     }
+
+    // Public website bootstrap config (landing video/store links)
+    match /public_site/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
   }
 }

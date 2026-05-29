@@ -21,6 +21,21 @@ import { ACTIVITIES } from '../../constants/activities';
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const TASK_DURATION_MINUTES: Record<string, number> = {
+  brush_teeth: 10,
+  get_dressed: 10,
+  eat_breakfast: 20,
+  put_shoes_on: 5,
+  tidy_room: 30,
+  wash_face: 10,
+  pack_backpack: 7,
+  put_on_pajamas: 10,
+  comb_hair: 10,
+  drink_water: 5,
+  use_toilet: 10,
+  read_book: 20,
+};
+
 export default function RoutineScreen() {
   const insets = useSafeAreaInsets();
   const topInset = insets.top + (Platform.OS === 'android' ? 8 : 0);
@@ -214,7 +229,8 @@ export default function RoutineScreen() {
             const sub = metas.slice(1).map((meta) => meta.label).join(' • ');
             const previewEmoji = metas.map((meta) => meta.emoji).join(' ');
 
-            const durationMin = Math.max(5, step.length * 5);
+            const primaryActivityKey = step[0] ?? '';
+            const durationMin = TASK_DURATION_MINUTES[primaryActivityKey] ?? Math.max(5, step.length * 5);
             const done = completedSteps[index] ?? false;
 
             return (
@@ -428,7 +444,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
   },
   tasksTitle: {
-    fontSize: 30,
+    fontSize: 20,
     color: '#2B2A28',
     fontWeight: '800',
     letterSpacing: 0.8,
@@ -440,12 +456,12 @@ const styles = StyleSheet.create({
   },
   tasksSub: {
     color: '#6C5F3D',
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '700',
   },
   tasksHeroSub: {
     color: '#8A7C56',
-    fontSize: 14,
+    fontSize: 12,
     marginBottom: 4,
   },
   tasksList: {
@@ -485,7 +501,7 @@ const styles = StyleSheet.create({
     paddingRight: 8,
   },
   taskTitle: {
-    fontSize: 30,
+    fontSize: 20,
     lineHeight: 34,
     fontWeight: '700',
     color: '#252420',

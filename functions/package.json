@@ -3,6 +3,7 @@
   "description": "Firebase Cloud Functions for Kids Routine Coach",
   "scripts": {
     "build": "tsc",
+    "seed:public-site": "node scripts/seed-public-site-config.js",
     "serve": "npm run build && firebase emulators:start --only functions",
     "shell": "npm run build && firebase functions:shell",
     "start": "npm run shell",

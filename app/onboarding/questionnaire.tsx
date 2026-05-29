@@ -34,19 +34,19 @@ import { grantDebugHomeAccess } from '../../services/debugFlow';
 const ITEM_HEIGHT = 48;
 
 const TONES: Array<{ key: ToneOption; label: string }> = [
-  { key: 'cheerful', label: 'Cheerful' },
-  { key: 'encouraging', label: 'Encouraging' },
-  { key: 'calm', label: 'Calm' },
+  { key: 'cheerful', label: 'Cheerful 😄' },
+  { key: 'encouraging', label: 'Encouraging 💪' },
+  { key: 'calm', label: 'Calm 😌' },
 ];
 
 const VOICES: Array<{ key: VoiceOption; label: string }> = [
-  { key: 'woman', label: 'Woman' },
-  { key: 'man', label: 'Man' },
+  { key: 'woman', label: 'Woman 👩' },
+  { key: 'man', label: 'Man 👨' },
 ];
 
 const GENDERS: Array<{ key: ChildGender; label: string; avatarId: string }> = [
-  { key: 'boy', label: 'Boy', avatarId: 'avatar_boy_01' },
-  { key: 'girl', label: 'Girl', avatarId: 'avatar_girl_01' },
+  { key: 'boy', label: 'Boy 👦', avatarId: 'avatar_boy_01' },
+  { key: 'girl', label: 'Girl 👧', avatarId: 'avatar_girl_01' },
 ];
 
 function buildTimeSlots(): string[] {

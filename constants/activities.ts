@@ -18,9 +18,9 @@ export const ADDITIONAL_ACTIVITIES: ActivityConfig[] = [
   },
   {
     id: 'use_toilet',
-    uiTitle: 'Use Toilet',
-    uiEmoji: '🚽',
-    defaultTTSPhrase: 'Time to go to the potty, {childName}!',
+    uiTitle: 'Take a Shower',
+    uiEmoji: '🚿',
+    defaultTTSPhrase: 'Time for a refreshing shower, {childName}!',
     avatarVideoRef: 'avatar_loop_use_toilet.mp4',
   },
   {
@@ -114,10 +114,10 @@ export const ACTIVITIES: Record<string, ActivityMeta> = {
   },
   use_toilet: {
     key: 'use_toilet',
-    label: 'Use Toilet',
-    promptTemplate: (name) => `Time to go to the potty, ${name}!`,
+    label: 'Take a Shower',
+    promptTemplate: (name) => `Time for a refreshing shower, ${name}!`,
     videoFile: 'avatar_loop_use_toilet.mp4',
-    emoji: '🚽',
+    emoji: '🚿',
     color: '#26A69A',
   },
   read_book: {
