@@ -517,6 +517,13 @@
   transition: transform 0.18s ease;
 }
 
+.pseudo-badge {
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
 .store-badge {
   display: block;
   width: 100%;
