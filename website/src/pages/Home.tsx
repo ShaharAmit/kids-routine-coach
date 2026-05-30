@@ -1,4 +1,4 @@
-import { FormEvent, useRef, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useVisibility } from '../hooks/useVisibility';
 import { useWelcomeVideo } from '../hooks/useWelcomeVideo';
@@ -22,10 +22,19 @@ export default function HomePage() {
   const [email, setEmail] = useState('');
   const [submitState, setSubmitState] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
   const [submitMessage, setSubmitMessage] = useState('');
+  const [isVideoReady, setIsVideoReady] = useState(false);
+  const [pendingPlay, setPendingPlay] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  // 'play' | 'pause' | null — which icon to flash briefly
+  const [flashIcon, setFlashIcon] = useState<'play' | 'pause' | null>(null);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const readyFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastTouchRef = useRef(0);
 
   const {
     loading,
     videoSrc,
+    posterSrc,
     captionSrc,
     videoError,
     hasStarted,
@@ -34,9 +43,55 @@ export default function HomePage() {
     handleVideoEnded,
     handleVideoPlay,
     handleVideoError,
+    handleVideoPause,
   } = useWelcomeVideo({ videoRef, fallbackConfig: FALLBACK });
 
   const isVideoFullyVisible = useVisibility(heroStageRef, 0.75);
+
+  useEffect(() => {
+    setIsVideoReady(false);
+    setPendingPlay(false);
+    if (readyFallbackRef.current) clearTimeout(readyFallbackRef.current);
+  }, [videoSrc]);
+
+  // iOS often won't fire canplay/loadeddata for blob URLs without play().
+  // Force-ready after 2.5s so the loading cover never stays forever.
+  useEffect(() => {
+    if (!videoSrc || loading || isVideoReady) return;
+    if (readyFallbackRef.current) clearTimeout(readyFallbackRef.current);
+    readyFallbackRef.current = setTimeout(() => setIsVideoReady(true), 2500);
+    return () => {
+      if (readyFallbackRef.current) clearTimeout(readyFallbackRef.current);
+    };
+  }, [videoSrc, loading, isVideoReady]);
+
+  useEffect(() => {
+    if (!pendingPlay || !videoSrc || !isVideoReady || hasStarted || shouldShowSignup) {
+      return;
+    }
+
+    handleStartVideo();
+    setPendingPlay(false);
+  }, [hasStarted, isVideoReady, pendingPlay, shouldShowSignup, videoSrc, handleStartVideo]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    if (window.innerWidth <= 780) {
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+    }
+  }, []);
+
+  // Force iOS Safari to paint the first frame without playing
+  useEffect(() => {
+    const videoEl = videoRef.current;
+    if (!isVideoReady || hasStarted || !videoEl) return;
+    if (videoEl.readyState >= 2 && videoEl.currentTime === 0) {
+      videoEl.currentTime = 0.001;
+    }
+  }, [isVideoReady, hasStarted]);
 
   function openSignupModal(source: 'ios_badge' | 'android_badge' | 'floating_button') {
     setIsSignupOpen(true);
@@ -102,6 +157,43 @@ export default function HomePage() {
     window.scrollTo({ top: targetTop, behavior: 'smooth' });
   }
 
+  function triggerFlash(icon: 'play' | 'pause') {
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    setFlashIcon(icon);
+    flashTimerRef.current = setTimeout(() => setFlashIcon(null), 500);
+  }
+
+  function handleVideoAreaActivate(e?: React.SyntheticEvent) {
+    // Suppress the synthetic click that iOS fires ~300ms after touchstart
+    if (e?.type === 'click' && Date.now() - lastTouchRef.current < 600) return;
+    if (e?.type === 'touchstart') lastTouchRef.current = Date.now();
+    if (!videoSrc || shouldShowSignup || !isVideoReady) {
+      if (!isVideoReady && videoSrc && !shouldShowSignup) setPendingPlay(true);
+      return;
+    }
+
+    const videoEl = videoRef.current;
+
+    if (!hasStarted) {
+      // First play
+      handleStartVideo();
+      triggerFlash('pause');
+      setIsPaused(false);
+      return;
+    }
+
+    if (videoEl && !videoEl.paused) {
+      videoEl.pause();
+      handleVideoPause();
+      triggerFlash('play');
+      setIsPaused(true);
+    } else if (videoEl) {
+      videoEl.play().catch(() => {});
+      triggerFlash('pause');
+      setIsPaused(false);
+    }
+  }
+
   return (
     <main className="home-shell">
       <header className="top-bar">
@@ -144,35 +236,107 @@ export default function HomePage() {
           </p>
         </div>
 
-        <section ref={heroStageRef} className="hero-stage" aria-label="Welcome video">
+        <section
+          ref={heroStageRef}
+          className={`hero-stage ${videoSrc && !loading && !shouldShowSignup ? 'tappable' : ''}`}
+          aria-label="Welcome video"
+          onClick={(e) => handleVideoAreaActivate(e)}
+          onTouchStart={(e) => handleVideoAreaActivate(e)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              handleVideoAreaActivate();
+            }
+          }}
+          role={videoSrc && !loading && !shouldShowSignup ? 'button' : undefined}
+          tabIndex={videoSrc && !loading && !shouldShowSignup ? 0 : undefined}
+        >
           {loading ? <p className="state-label">Loading welcome video...</p> : null}
           {!loading && videoError ? <p className="state-label error">{videoError}</p> : null}
 
           {videoSrc ? (
+            <>
             <video
               ref={videoRef}
               key={`${videoSrc}:${captionSrc}`}
               className="welcome-video"
               src={videoSrc}
+              poster={posterSrc || undefined}
               playsInline
               preload="auto"
               controls={false}
               onEnded={handleVideoEnded}
-              onPlay={handleVideoPlay}
+              onPlay={() => { handleVideoPlay(); setIsPaused(false); }}
+              onPause={() => setIsPaused(true)}
               onError={handleVideoError}
+              onLoadedData={() => setIsVideoReady(true)}
+              onCanPlay={() => setIsVideoReady(true)}
             >
               {captionSrc ? (
                 <track kind="captions" srcLang="en" label="English" src={captionSrc} default />
               ) : null}
             </video>
+
+            {/* Shimmer: show while loading, OR while no poster AND neither the video engine
+                 nor the 2.5s fallback timer has declared ready yet.
+                 The isVideoReady guard prevents infinite shimmer when the Storage poster
+                 isn't uploaded yet (e.g. welcome.jpg missing from Firebase Storage). */}
+            {(loading || (!hasStarted && !posterSrc && !isVideoReady)) ? (
+              <div className="video-loading-cover" aria-label="Preparing welcome experience">
+                <img
+                  className="video-loading-image"
+                  src="/video-placeholder.svg"
+                  alt="Welcome loading preview"
+                />
+                <div className="video-loading-overlay" aria-hidden="true" />
+              </div>
+            ) : null}
+            </>
           ) : (
-            <div className="video-fallback" aria-label="Video unavailable" />
+            loading
+              ? (
+                <div className="video-loading-cover" aria-label="Preparing welcome experience">
+                  <img
+                    className="video-loading-image"
+                    src="/video-placeholder.svg"
+                    alt="Welcome loading preview"
+                  />
+                  <div className="video-loading-overlay" aria-hidden="true" />
+                </div>
+              )
+              : <div className="video-filler unavailable" aria-label="Video unavailable" />
           )}
 
-          {videoSrc && !hasStarted && !shouldShowSignup ? (
-            <button className="video-start-button" type="button" onClick={handleStartVideo}>
-              Play welcome video
-            </button>
+          {/* Persistent play circle — visible when paused/not yet started */}
+          {videoSrc && !loading && !shouldShowSignup && (!hasStarted || isPaused) ? (
+            <div className="video-play-circle" aria-hidden="true">
+              <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="24" cy="24" r="23" fill="rgba(0,0,0,0.52)" stroke="rgba(255,255,255,0.85)" strokeWidth="1.5"/>
+                <polygon points="19,14 36,24 19,34" fill="white"/>
+              </svg>
+            </div>
+          ) : null}
+
+          {/* Flash icon — briefly shown on tap, YouTube style */}
+          {flashIcon ? (
+            <div className={`video-flash-icon video-flash-icon--${flashIcon}`} aria-hidden="true">
+              {flashIcon === 'pause' ? (
+                <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <circle cx="24" cy="24" r="23" fill="rgba(0,0,0,0.52)" stroke="rgba(255,255,255,0.7)" strokeWidth="1.5"/>
+                  <rect x="15" y="13" width="6" height="22" rx="2" fill="white"/>
+                  <rect x="27" y="13" width="6" height="22" rx="2" fill="white"/>
+                </svg>
+              ) : (
+                <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <circle cx="24" cy="24" r="23" fill="rgba(0,0,0,0.52)" stroke="rgba(255,255,255,0.7)" strokeWidth="1.5"/>
+                  <polygon points="19,14 36,24 19,34" fill="white"/>
+                </svg>
+              )}
+            </div>
+          ) : null}
+
+          {videoSrc && !hasStarted && !shouldShowSignup && isVideoReady ? (
+            <p className="video-tap-hint">Tap to play</p>
           ) : null}
 
           {shouldShowSignup ? (

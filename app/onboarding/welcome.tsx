@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, StyleSheet, Text, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Image, StyleSheet, Text, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { setAudioModeAsync } from 'expo-audio';
 import Animated, { FadeIn } from 'react-native-reanimated';
@@ -7,13 +7,17 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { downloadWelcomeAssets, getWelcomeAssetPaths } from '../../services/assetCacheService';
+import { getOrExtractMobilePoster } from '../../services/mobileVideoCache';
 
 type WelcomeVideoPlayerProps = {
   videoPath: string;
+  posterUri?: string;
   onEnded: () => void;
 };
 
-function WelcomeVideoPlayer({ videoPath, onEnded }: WelcomeVideoPlayerProps) {
+function WelcomeVideoPlayer({ videoPath, posterUri, onEnded }: WelcomeVideoPlayerProps) {
+  const [isVideoReady, setIsVideoReady] = useState(false);
+
   const videoPlayer = useVideoPlayer(videoPath, (player) => {
     player.loop = false;
     player.muted = false;
@@ -47,7 +51,25 @@ function WelcomeVideoPlayer({ videoPath, onEnded }: WelcomeVideoPlayerProps) {
     };
   }, [onEnded, videoPlayer]);
 
-  return <VideoView player={videoPlayer} style={styles.video} contentFit="contain" nativeControls={false} />;
+  return (
+    <View style={styles.videoContainer}>
+      <VideoView
+        player={videoPlayer}
+        style={styles.video}
+        contentFit="contain"
+        nativeControls={false}
+        onReadyForDisplay={() => setIsVideoReady(true)}
+      />
+      {/* Poster overlay: sits above the video until the native engine has painted its first frame. */}
+      {!isVideoReady && posterUri ? (
+        <Image
+          source={{ uri: posterUri }}
+          style={styles.posterOverlay}
+          resizeMode="contain"
+        />
+      ) : null}
+    </View>
+  );
 }
 
 export default function WelcomeScreen() {
@@ -55,6 +77,7 @@ export default function WelcomeScreen() {
   const [videoDone, setVideoDone] = useState(false);
   const [isPreparing, setIsPreparing] = useState(true);
   const [assetsReady, setAssetsReady] = useState(false);
+  const [posterUri, setPosterUri] = useState<string | undefined>(undefined);
 
   const { videoPath } = useMemo(() => getWelcomeAssetPaths(), []);
 
@@ -83,6 +106,12 @@ export default function WelcomeScreen() {
       setAssetsReady(true);
       setVideoDone(false);
       setIsPreparing(false);
+
+      // Non-blocking: generate + cache the poster frame natively.
+      // On return visits the JPEG is read straight from disk — no generation needed.
+      getOrExtractMobilePoster(videoPath).then((uri) => {
+        if (mounted && uri) setPosterUri(uri);
+      }).catch(() => {});
     }
 
     prepareAssets().catch((err) => {
@@ -104,7 +133,7 @@ export default function WelcomeScreen() {
           <Text style={styles.preparingText}>Preparing welcome video...</Text>
         </View>
       ) : assetsReady ? (
-        <WelcomeVideoPlayer videoPath={videoPath} onEnded={() => setVideoDone(true)} />
+        <WelcomeVideoPlayer videoPath={videoPath} posterUri={posterUri} onEnded={() => setVideoDone(true)} />
       ) : (
         <View style={styles.fallback}>
           <Text style={styles.fallbackEmoji}>🧑‍🏫</Text>
@@ -135,9 +164,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  video: {
+  videoContainer: {
     width: '100%',
     height: '100%',
+  },
+  video: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  posterOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 10,
   },
   fallback: {
     width: '100%',

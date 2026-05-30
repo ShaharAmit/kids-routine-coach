@@ -8,7 +8,7 @@ type SubmitEarlyAccessLeadResponse = {
 const submitEarlyAccessLeadCallable = httpsCallable<
   { email: string },
   SubmitEarlyAccessLeadResponse
->(functions, 'submitEarlyAccessLead');
+>(functions, 'submitEarlyAccessLead', { timeout: 10_000 });
 
 export async function submitEarlyAccessLead(email: string): Promise<SubmitEarlyAccessLeadResponse> {
   const normalizedEmail = email.trim().toLowerCase();
