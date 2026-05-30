@@ -2,6 +2,7 @@ import { FormEvent, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useVisibility } from '../hooks/useVisibility';
 import { useWelcomeVideo } from '../hooks/useWelcomeVideo';
+import { trackEvent } from '../services/analytics';
 import { submitEarlyAccessLead } from '../services/earlyAccess';
 import { SiteConfig } from '../services/siteConfig';
 import '../styles/home.css';
@@ -37,6 +38,16 @@ export default function HomePage() {
 
   const isVideoFullyVisible = useVisibility(heroStageRef, 0.75);
 
+  function openSignupModal(source: 'ios_badge' | 'android_badge' | 'floating_button') {
+    setIsSignupOpen(true);
+    trackEvent('early_access_modal_open', { source });
+  }
+
+  function closeSignupModal() {
+    setIsSignupOpen(false);
+    trackEvent('early_access_modal_close');
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -45,27 +56,32 @@ export default function HomePage() {
     if (!isValidEmail) {
       setSubmitState('error');
       setSubmitMessage('Enter a valid email address to reserve early access.');
+      trackEvent('early_access_submit_invalid_email');
       return;
     }
 
     try {
       setSubmitState('submitting');
       setSubmitMessage('');
+      trackEvent('early_access_submit_attempt');
       const result = await submitEarlyAccessLead(normalizedEmail);
 
       if (result.status === 'exists') {
         setSubmitState('success');
         setSubmitMessage('That email is already on the early access list.');
+        trackEvent('early_access_submit_exists');
         return;
       }
 
       setSubmitState('success');
       setSubmitMessage("You're on the list. We'll reach out before early access opens.");
       setEmail('');
+      trackEvent('early_access_submit_success');
     } catch (error) {
       console.warn('Failed to submit early access lead', error);
       setSubmitState('error');
       setSubmitMessage('Could not save your email right now. Please try again.');
+      trackEvent('early_access_submit_error');
     }
   }
 
@@ -169,7 +185,7 @@ export default function HomePage() {
         <button
           className="store-badge-link pseudo-badge"
           type="button"
-          onClick={() => setIsSignupOpen(true)}
+          onClick={() => openSignupModal('ios_badge')}
           aria-label="Join early access for iOS"
         >
           <img
@@ -181,7 +197,7 @@ export default function HomePage() {
         <button
           className="store-badge-link pseudo-badge android-link"
           type="button"
-          onClick={() => setIsSignupOpen(true)}
+          onClick={() => openSignupModal('android_badge')}
           aria-label="Join early access for Android"
         >
           <img
@@ -193,7 +209,7 @@ export default function HomePage() {
         <button
           className="floating-signup-button"
           type="button"
-          onClick={() => setIsSignupOpen(true)}
+          onClick={() => openSignupModal('floating_button')}
         >
           Early Access Signup
         </button>
@@ -212,7 +228,7 @@ export default function HomePage() {
       ) : null}
 
       {isSignupOpen ? (
-        <div className="signup-modal-backdrop" onClick={() => setIsSignupOpen(false)}>
+        <div className="signup-modal-backdrop" onClick={closeSignupModal}>
           <div
             className="signup-modal"
             role="dialog"
@@ -224,7 +240,7 @@ export default function HomePage() {
               className="signup-modal-close"
               type="button"
               aria-label="Close signup"
-              onClick={() => setIsSignupOpen(false)}
+              onClick={closeSignupModal}
             >
               Close
             </button>

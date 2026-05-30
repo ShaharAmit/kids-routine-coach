@@ -18,6 +18,11 @@ cp .env.example .env
 ```
 
 2. Fill in Firebase web config values in `.env`.
+  Add GA4 measurement ID as well:
+
+```bash
+VITE_GA_MEASUREMENT_ID=G-XXXXXXXXXX
+```
 
 3. Install and run:
 
