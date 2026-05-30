@@ -18,5 +18,10 @@ service cloud.firestore {
       allow read: if true;
       allow write: if false;
     }
+
+    // Early access leads are written only by Cloud Functions (admin SDK).
+    match /early_access/{leadId} {
+      allow read, write: if false;
+    }
   }
 }

@@ -2,6 +2,7 @@ import * as admin from 'firebase-admin';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
+import { createHash } from 'crypto';
 import { onCall, HttpsError, CallableRequest } from 'firebase-functions/v2/https';
 import { onDocumentDeleted } from 'firebase-functions/v2/firestore';
 import { GoogleGenAI } from '@google/genai';
@@ -35,6 +36,14 @@ interface GenerateTTSRequest {
 interface GenerateTTSResponse {
   audioUrl: string;
   cacheKey: string;
+}
+
+interface SubmitEarlyAccessLeadRequest {
+  email: string;
+}
+
+interface SubmitEarlyAccessLeadResponse {
+  status: 'created' | 'exists';
 }
 
 function pcm16ToWav(pcmData: Buffer, sampleRate = 24000, channels = 1, bitsPerSample = 16): Buffer {
@@ -101,6 +110,18 @@ function buildTonePrompt(tone: GenerateTTSRequest['tone'], text: string): string
 
 function mapVoiceToGemini(voice: GenerateTTSRequest['voice']): string {
   return voice === 'man' ? 'Kore' : 'Aoede';
+}
+
+function normalizeEmail(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function isValidEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function hashEmail(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
 }
 
 async function synthesizeWithGeminiTts(
@@ -233,6 +254,61 @@ export const generateRoutineAudio = onCall(
       throw new HttpsError('internal', `TTS generation failed: ${message}`);
     }
   });
+
+export const submitEarlyAccessLead = onCall(
+  { cors: true },
+  async (
+    request: CallableRequest<SubmitEarlyAccessLeadRequest>
+  ): Promise<SubmitEarlyAccessLeadResponse> => {
+    const normalizedEmail = normalizeEmail(request.data?.email ?? '');
+
+    if (!normalizedEmail || !isValidEmail(normalizedEmail)) {
+      throw new HttpsError('invalid-argument', 'A valid email is required.');
+    }
+
+    const leadHash = hashEmail(normalizedEmail);
+    const leadsCollection = db.collection('early_access');
+    const leadRef = leadsCollection.doc(leadHash);
+    const legacyLeadRef = leadsCollection.doc(normalizedEmail);
+
+    const result = await db.runTransaction(async (transaction) => {
+      const [leadDoc, legacyLeadDoc] = await Promise.all([
+        transaction.get(leadRef),
+        transaction.get(legacyLeadRef),
+      ]);
+
+      if (leadDoc.exists) {
+        return 'exists' as const;
+      }
+
+      if (legacyLeadDoc.exists) {
+        const legacyData = legacyLeadDoc.data() ?? {};
+        transaction.create(leadRef, {
+          ...legacyData,
+          email: normalizedEmail,
+          emailLower: normalizedEmail,
+          emailHash: leadHash,
+          source: 'website_welcome_video',
+          migratedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        transaction.delete(legacyLeadRef);
+        return 'exists' as const;
+      }
+
+      transaction.create(leadRef, {
+        email: normalizedEmail,
+        emailLower: normalizedEmail,
+        emailHash: leadHash,
+        source: 'website_welcome_video',
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      return 'created' as const;
+    });
+
+    return { status: result };
+  }
+);
 
 export const onAudioCacheDocDeleted = onDocumentDeleted(
   'audio_cache/{cacheKey}',

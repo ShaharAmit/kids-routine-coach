@@ -1,58 +1,90 @@
-import { useEffect, useState } from 'react';
+import { FormEvent, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { fetchSiteConfig, resolveWelcomeVideoUrl, SiteConfig } from '../services/siteConfig';
-import { getCachedVideoSource } from '../services/videoCache';
+import { useVisibility } from '../hooks/useVisibility';
+import { useWelcomeVideo } from '../hooks/useWelcomeVideo';
+import { submitEarlyAccessLead } from '../services/earlyAccess';
+import { SiteConfig } from '../services/siteConfig';
 import '../styles/home.css';
 
 const FALLBACK: SiteConfig = {
   welcomeVideoUrl: 'avatars/default/welcome.mp4',
+  welcomeCaptionUrl: '/welcome-captions.vtt',
   appStoreUrl: 'https://apps.apple.com/',
   playStoreUrl: 'https://play.google.com/store',
 };
 
 export default function HomePage() {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const heroStageRef = useRef<HTMLElement | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [siteConfig, setSiteConfig] = useState<SiteConfig>(FALLBACK);
-  const [loading, setLoading] = useState(true);
-  const [videoSrc, setVideoSrc] = useState<string>('');
-  const [videoError, setVideoError] = useState<string>('');
+  const [isSignupOpen, setIsSignupOpen] = useState(false);
+  const [email, setEmail] = useState('');
+  const [submitState, setSubmitState] = useState<'idle' | 'submitting' | 'success' | 'error'>('idle');
+  const [submitMessage, setSubmitMessage] = useState('');
 
-  useEffect(() => {
-    let mounted = true;
-    let releaseCachedVideo: (() => void) | undefined;
+  const {
+    loading,
+    videoSrc,
+    captionSrc,
+    videoError,
+    hasStarted,
+    shouldShowSignup,
+    handleStartVideo,
+    handleVideoEnded,
+    handleVideoPlay,
+    handleVideoError,
+  } = useWelcomeVideo({ videoRef, fallbackConfig: FALLBACK });
 
-    async function loadConfig() {
-      try {
-        const config = await fetchSiteConfig();
-        const resolvedVideoUrl = await resolveWelcomeVideoUrl(config.welcomeVideoUrl);
-        const cachedVideo = await getCachedVideoSource(resolvedVideoUrl);
-        if (mounted) {
-          setSiteConfig(config);
-          setVideoSrc(cachedVideo.src);
-          setVideoError('');
-        }
-        releaseCachedVideo = cachedVideo.release;
-      } catch (error) {
-        console.warn('Failed to load site config from Firestore', error);
-        if (mounted) {
-          setVideoSrc('');
-          setVideoError('Welcome video failed to load from config.');
-        }
-      } finally {
-        if (mounted) {
-          setLoading(false);
-        }
-      }
+  const isVideoFullyVisible = useVisibility(heroStageRef, 0.75);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail);
+    if (!isValidEmail) {
+      setSubmitState('error');
+      setSubmitMessage('Enter a valid email address to reserve early access.');
+      return;
     }
 
-    loadConfig();
-    return () => {
-      mounted = false;
-      if (releaseCachedVideo) {
-        releaseCachedVideo();
+    try {
+      setSubmitState('submitting');
+      setSubmitMessage('');
+      const result = await submitEarlyAccessLead(normalizedEmail);
+
+      if (result.status === 'exists') {
+        setSubmitState('success');
+        setSubmitMessage('That email is already on the early access list.');
+        return;
       }
-    };
-  }, []);
+
+      setSubmitState('success');
+      setSubmitMessage("You're on the list. We'll reach out before early access opens.");
+      setEmail('');
+    } catch (error) {
+      console.warn('Failed to submit early access lead', error);
+      setSubmitState('error');
+      setSubmitMessage('Could not save your email right now. Please try again.');
+    }
+  }
+
+  function handleJumpToVideo() {
+    const stageNode = heroStageRef.current;
+    if (!stageNode || typeof window === 'undefined') {
+      return;
+    }
+
+    const stageTop = stageNode.getBoundingClientRect().top + window.scrollY;
+    const targetTop = Math.max(stageTop - 24, 0);
+
+    // Keep this cue directional: it should only move the user downward toward the video.
+    if (window.scrollY >= targetTop) {
+      return;
+    }
+
+    window.scrollTo({ top: targetTop, behavior: 'smooth' });
+  }
 
   return (
     <main className="home-shell">
@@ -90,63 +122,158 @@ export default function HomePage() {
           <p className="eyebrow">Morning Calm, Built In</p>
           <h1 className="hero-title">Meet Your Child&apos;s New Routine Coach</h1>
           <p className="hero-subtitle">
-            Fun, interactive morning workflows that help parents turn chaotic starts into
-            calmer, more consistent days.
+            Kidocoach is a daily routine app for kids built for morning routines, bedtime
+            routines, and daily habits, helping parents raise independent children with a
+            playful routine experience.
           </p>
-
-          <div className="store-links" role="navigation" aria-label="Store links">
-            <a
-              href={siteConfig.appStoreUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="store-badge-link"
-            >
-              <img
-                className="store-badge ios"
-                src="https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg"
-                alt="Download on the App Store"
-              />
-            </a>
-            <a
-              href={siteConfig.playStoreUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="store-badge-link android-link"
-            >
-              <img
-                className="store-badge android"
-                src="https://upload.wikimedia.org/wikipedia/commons/7/78/Google_Play_Store_badge_EN.svg"
-                alt="Get it on Google Play"
-              />
-            </a>
-          </div>
         </div>
 
-        <section className="hero-stage" aria-label="Welcome video">
+        <section ref={heroStageRef} className="hero-stage" aria-label="Welcome video">
           {loading ? <p className="state-label">Loading welcome video...</p> : null}
           {!loading && videoError ? <p className="state-label error">{videoError}</p> : null}
 
           {videoSrc ? (
             <video
-              key={videoSrc}
+              ref={videoRef}
+              key={`${videoSrc}:${captionSrc}`}
               className="welcome-video"
               src={videoSrc}
-              autoPlay
-              muted
-              loop
               playsInline
               preload="auto"
               controls={false}
-              onError={() => {
-                setVideoError('Welcome video is unavailable. Check public_site/config.welcomeVideoUrl.');
-                setVideoSrc('');
-              }}
-            />
+              onEnded={handleVideoEnded}
+              onPlay={handleVideoPlay}
+              onError={handleVideoError}
+            >
+              {captionSrc ? (
+                <track kind="captions" srcLang="en" label="English" src={captionSrc} default />
+              ) : null}
+            </video>
           ) : (
             <div className="video-fallback" aria-label="Video unavailable" />
           )}
+
+          {videoSrc && !hasStarted && !shouldShowSignup ? (
+            <button className="video-start-button" type="button" onClick={handleStartVideo}>
+              Play welcome video
+            </button>
+          ) : null}
+
+          {shouldShowSignup ? (
+            <p className="signup-ready-hint">Early access is open now</p>
+          ) : null}
         </section>
       </section>
+
+      <div className="floating-store-links" role="navigation" aria-label="Store links">
+        <button
+          className="store-badge-link pseudo-badge"
+          type="button"
+          onClick={() => setIsSignupOpen(true)}
+          aria-label="Join early access for iOS"
+        >
+          <img
+            className="store-badge ios"
+            src="https://developer.apple.com/assets/elements/badges/download-on-the-app-store.svg"
+            alt="Coming soon to the App Store"
+          />
+        </button>
+        <button
+          className="store-badge-link pseudo-badge android-link"
+          type="button"
+          onClick={() => setIsSignupOpen(true)}
+          aria-label="Join early access for Android"
+        >
+          <img
+            className="store-badge android"
+            src="https://upload.wikimedia.org/wikipedia/commons/7/78/Google_Play_Store_badge_EN.svg"
+            alt="Coming soon to Google Play"
+          />
+        </button>
+        <button
+          className="floating-signup-button"
+          type="button"
+          onClick={() => setIsSignupOpen(true)}
+        >
+          Early Access Signup
+        </button>
+      </div>
+
+      {!isVideoFullyVisible ? (
+        <button
+          className="scroll-cue"
+          type="button"
+          aria-label="Scroll to welcome video"
+          onClick={handleJumpToVideo}
+        >
+          <span className="scroll-cue-text">Scroll</span>
+          <span className="scroll-cue-arrow" aria-hidden="true">↓</span>
+        </button>
+      ) : null}
+
+      {isSignupOpen ? (
+        <div className="signup-modal-backdrop" onClick={() => setIsSignupOpen(false)}>
+          <div
+            className="signup-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Early access signup"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              className="signup-modal-close"
+              type="button"
+              aria-label="Close signup"
+              onClick={() => setIsSignupOpen(false)}
+            >
+              Close
+            </button>
+
+            <div className="signup-panel" aria-live="polite">
+              <p className="signup-kicker">Early Access</p>
+              <h2 className="signup-title">Reserve your Founder&apos;s Pass</h2>
+              <p className="signup-copy">
+                Enter your email to lock in early access updates and the launch-rate offer.
+              </p>
+
+              <form className="signup-form" onSubmit={handleSubmit}>
+                <label className="signup-label" htmlFor="early-access-email">
+                  Email address
+                </label>
+                <input
+                  id="early-access-email"
+                  className="signup-input"
+                  type="email"
+                  inputMode="email"
+                  autoComplete="email"
+                  placeholder="you@example.com"
+                  value={email}
+                  onChange={(event) => {
+                    setEmail(event.target.value);
+                    if (submitState !== 'idle') {
+                      setSubmitState('idle');
+                      setSubmitMessage('');
+                    }
+                  }}
+                  disabled={submitState === 'submitting' || submitState === 'success'}
+                  required
+                />
+                <button
+                  className="signup-button"
+                  type="submit"
+                  disabled={submitState === 'submitting' || submitState === 'success'}
+                >
+                  {submitState === 'submitting' ? 'Saving...' : submitState === 'success' ? 'Saved' : 'Join Early Access'}
+                </button>
+              </form>
+
+              {submitMessage ? (
+                <p className={`signup-message ${submitState}`}>{submitMessage}</p>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }
