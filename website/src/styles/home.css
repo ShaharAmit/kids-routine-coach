@@ -48,15 +48,8 @@
   width: 40px;
   height: 40px;
   border-radius: 14px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, #f08b45, #e85f2a);
-  color: #fff9f0;
-  font-size: 14px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  font-family: 'Baloo 2', 'Nunito', 'Avenir Next', sans-serif;
+  display: block;
+  object-fit: cover;
   box-shadow: 0 10px 24px rgba(232, 95, 42, 0.28);
 }
 
