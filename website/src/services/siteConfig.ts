@@ -4,25 +4,15 @@ import { db, storage } from './firebase';
 
 export type SiteConfig = {
   welcomeVideoUrl: string;
-  welcomeCaptionUrl: string;
   appStoreUrl: string;
   playStoreUrl: string;
 };
 
 const DEFAULT_CONFIG: SiteConfig = {
   welcomeVideoUrl: 'avatars/default/welcome.mp4',
-  welcomeCaptionUrl: '/welcome-captions.vtt',
   appStoreUrl: 'https://apps.apple.com/',
   playStoreUrl: 'https://play.google.com/store',
 };
-
-function deriveCaptionPath(videoPath: string): string {
-  if (!videoPath.trim()) {
-    return DEFAULT_CONFIG.welcomeCaptionUrl;
-  }
-
-  return videoPath.replace(/\.[^.?#/]+(?=$|[?#])/, '.srt');
-}
 
 function readString(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : fallback;
@@ -66,10 +56,6 @@ export async function fetchSiteConfig(): Promise<SiteConfig> {
   const data = snapshot.data() as Record<string, unknown>;
   const config: SiteConfig = {
     welcomeVideoUrl: readString(data.welcomeVideoUrl, DEFAULT_CONFIG.welcomeVideoUrl),
-    welcomeCaptionUrl: readString(
-      data.welcomeCaptionUrl,
-      deriveCaptionPath(readString(data.welcomeVideoUrl, DEFAULT_CONFIG.welcomeVideoUrl))
-    ),
     appStoreUrl: readString(data.appStoreUrl, DEFAULT_CONFIG.appStoreUrl),
     playStoreUrl: readString(data.playStoreUrl, DEFAULT_CONFIG.playStoreUrl),
   };

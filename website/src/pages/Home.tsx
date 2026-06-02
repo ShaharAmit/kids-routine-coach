@@ -9,7 +9,6 @@ import '../styles/home.css';
 
 const FALLBACK: SiteConfig = {
   welcomeVideoUrl: 'avatars/default/welcome.mp4',
-  welcomeCaptionUrl: '/welcome-captions.vtt',
   appStoreUrl: 'https://apps.apple.com/',
   playStoreUrl: 'https://play.google.com/store',
 };
@@ -35,7 +34,6 @@ export default function HomePage() {
     loading,
     videoSrc,
     posterSrc,
-    captionSrc,
     videoError,
     hasStarted,
     shouldShowSignup,
@@ -256,7 +254,7 @@ export default function HomePage() {
             <>
             <video
               ref={videoRef}
-              key={`${videoSrc}:${captionSrc}`}
+              key={videoSrc}
               className="welcome-video"
               src={videoSrc}
               poster={posterSrc || undefined}
@@ -270,9 +268,6 @@ export default function HomePage() {
               onLoadedData={() => setIsVideoReady(true)}
               onCanPlay={() => setIsVideoReady(true)}
             >
-              {captionSrc ? (
-                <track kind="captions" srcLang="en" label="English" src={captionSrc} default />
-              ) : null}
             </video>
 
             {/* Shimmer: show while loading, OR while no poster AND neither the video engine
