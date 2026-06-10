@@ -11,6 +11,23 @@ import { getPaidStatus } from '../services/subscription';
 import { getChildProfile, hasCompletedOnboarding } from '../services/profile';
 import { Routine } from '../types';
 import { hasDebugHomeAccess } from '../services/debugFlow';
+import { getHomeBootstrapSnapshot, primeHomeBootstrap } from '../services/homeBootstrap';
+
+const HOME_PREWARM_TIMEOUT_MS = 4500;
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 export default function LoadingScreen() {
   const progressAnim = useRef(new Animated.Value(0)).current;
@@ -44,23 +61,43 @@ export default function LoadingScreen() {
         const onboardingDone = await hasCompletedOnboarding();
 
         if (onboardingDone && isPaid) {
+          setStage('Loading your routines...');
+          setProgress(72);
+
+          const bootstrapPromise = primeHomeBootstrap(user.uid).catch((err) => {
+            console.warn('[Loading] Home bootstrap preload failed:', err);
+            return null;
+          });
+
+          await withTimeout(bootstrapPromise, HOME_PREWARM_TIMEOUT_MS);
+
           const profile = await getChildProfile();
-          if (profile) {
-            const routine: Routine = {
-              id: `routine_${profile.userId}`,
-              userId: profile.userId,
-              childName: profile.childName,
-              childAge: profile.age,
-              avatarId: profile.avatarId,
-              scheduledTime: profile.scheduledTime,
-              activityStack: profile.activityStack,
-              stepTimes: profile.stepTimes,
-              tone: profile.tone,
-              voice: profile.voice,
-            };
-            preloadRoutineAssetsInBackground(routine).catch((err) => {
+          const snapshot = getHomeBootstrapSnapshot(user.uid);
+          const fallbackRoutine: Routine | null = profile
+            ? {
+                id: `routine_${profile.userId}`,
+                userId: profile.userId,
+                childName: profile.childName,
+                childAge: profile.age,
+                avatarId: profile.avatarId,
+                scheduledTime: profile.scheduledTime,
+                activityStack: profile.activityStack,
+                stepTimes: profile.stepTimes,
+                tone: profile.tone,
+                voice: profile.voice,
+              }
+            : null;
+
+          const routineToWarm = snapshot?.routines[0] ?? fallbackRoutine;
+          if (routineToWarm) {
+            setStage('Preparing media...');
+            setProgress(88);
+
+            const warmPromise = preloadRoutineAssetsInBackground(routineToWarm).catch((err) => {
               console.warn('[Loading] Background warmup failed:', err);
             });
+
+            await withTimeout(warmPromise, HOME_PREWARM_TIMEOUT_MS);
           }
         }
 

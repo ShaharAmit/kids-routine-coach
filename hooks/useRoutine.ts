@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { doc, getDoc, collection, query, where, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { ActivityKey, ActivityStep, Routine, normalizeActivityStack, normalizeStepTimes } from '../types';
+import { getHomeBootstrapSnapshot } from '../services/homeBootstrap';
 
 type FirestoreStep = {
   activities: ActivityKey[];
@@ -97,6 +98,14 @@ export function useUserRoutines(userId: string) {
       setLoading(false);
       setRoutines([]);
       return;
+    }
+
+    const bootstrapped = getHomeBootstrapSnapshot(userId);
+    if (bootstrapped?.routines?.length) {
+      setRoutines(bootstrapped.routines);
+      setLoading(false);
+    } else {
+      setLoading(true);
     }
 
     const q = query(collection(db, 'routines'), where('userId', '==', userId));

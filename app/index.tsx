@@ -1,43 +1,101 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
+  Animated,
+  AppState,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StatusBar,
   StyleSheet,
-  View,
   Text,
   TouchableOpacity,
-  ActivityIndicator,
-  StatusBar,
-  Alert,
-  Modal,
-  Pressable,
-  Animated,
-  Platform,
+  View,
   useWindowDimensions,
 } from 'react-native';
 import { router, Stack } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import ActivityPlayer from '../components/ActivityPlayer';
+import { ACTIVITIES } from '../constants/activities';
+import { useLocalDailyCompletion } from '../hooks/useLocalDailyCompletion';
 import { useUserRoutines } from '../hooks/useRoutine';
-import { ensureAuth } from '../services/firebase';
-import { getChildProfile } from '../services/profile';
 import { subscribeAssetCacheStatus } from '../services/assetCacheService';
+import { areAssetsReady, syncRoutineAssets } from '../services/assetSync';
+import { ensureAuth } from '../services/firebase';
+import { getHomeBootstrapSnapshot, isRoutineWarmed, markRoutineWarmed } from '../services/homeBootstrap';
+import { ensureAudioForRoutine } from '../services/tts';
+import { Routine } from '../types';
+
+const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+const TASK_DURATION_MINUTES: Record<string, number> = {
+  brush_teeth: 10,
+  get_dressed: 10,
+  eat_breakfast: 20,
+  put_shoes_on: 5,
+  tidy_room: 30,
+  wash_face: 10,
+  pack_backpack: 7,
+  put_on_pajamas: 10,
+  comb_hair: 10,
+  drink_water: 5,
+  use_toilet: 10,
+  read_book: 20,
+};
+
+const MORNING_START_MINUTES = 4 * 60;
+const EVENING_START_MINUTES = 15 * 60;
+
+function getCurrentSegment(): 'morning' | 'evening' {
+  const now = new Date();
+  const minutes = now.getHours() * 60 + now.getMinutes();
+  return minutes >= MORNING_START_MINUTES && minutes < EVENING_START_MINUTES
+    ? 'morning'
+    : 'evening';
+}
 
 function timeToMinutes(value: string): number {
   const [hourStr, minuteStr] = value.split(':');
   const hour = Number(hourStr);
   const minute = Number(minuteStr);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return 8 * 60;
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
+    return 8 * 60;
+  }
   return hour * 60 + minute;
 }
 
 function isMorningTime(value: string): boolean {
   const minutes = timeToMinutes(value);
-  return minutes >= 4 * 60 && minutes < 15 * 60;
+  return minutes >= MORNING_START_MINUTES && minutes < EVENING_START_MINUTES;
 }
 
-const roundedFont = Platform.select({
-  ios: 'Avenir Next Rounded',
-  android: 'sans-serif-medium',
-  default: 'System',
-});
+function routineHasTasksInSegment(routine: Routine, segment: 'morning' | 'evening'): boolean {
+  return routine.activityStack.some((_, index) => {
+    const time = routine.stepTimes?.[index] ?? routine.scheduledTime;
+    const stepIsMorning = isMorningTime(time);
+    return segment === 'morning' ? stepIsMorning : !stepIsMorning;
+  });
+}
+
+function pickPrimaryRoutine(
+  routines: Routine[],
+  userId: string,
+  segment: 'morning' | 'evening'
+): Routine | null {
+  if (routines.length === 0) return null;
+
+  const canonicalRoutineId = userId ? `routine_${userId}` : '';
+  if (canonicalRoutineId) {
+    const canonical = routines.find((routine) => routine.id === canonicalRoutineId);
+    if (canonical) return canonical;
+  }
+
+  const withSegmentTasks = routines.find((routine) => routineHasTasksInSegment(routine, segment));
+  if (withSegmentTasks) return withSegmentTasks;
+
+  return routines[0];
+}
 
 const roundedFontBold = Platform.select({
   ios: 'Avenir Next Rounded',
@@ -49,31 +107,77 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const topInset = insets.top + (Platform.OS === 'android' ? 8 : 0);
+
   const [userId, setUserId] = useState('');
   const [cacheStage, setCacheStage] = useState('idle');
+  const [segment, setSegment] = useState<'morning' | 'evening'>(getCurrentSegment());
+  const [viewMode, setViewMode] = useState<'tasks' | 'player'>('tasks');
+  const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  const [assetsReady, setAssetsReady] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+  const [trophyVisible, setTrophyVisible] = useState(false);
+  const [trophyShownThisSession, setTrophyShownThisSession] = useState<Record<'morning' | 'evening', boolean>>({
+    morning: false,
+    evening: false,
+  });
+
   const headerMenuButtonRef = useRef<any>(null);
   const menuAnim = useRef(new Animated.Value(0)).current;
+
   const { routines, loading, error } = useUserRoutines(userId);
+  const bootstrapSnapshot = useMemo(() => getHomeBootstrapSnapshot(userId), [userId]);
+  const mergedRoutines = useMemo(() => {
+    const byId = new Map<string, Routine>();
 
-  const primaryRoutine = routines[0] ?? null;
+    for (const routine of bootstrapSnapshot?.routines ?? []) {
+      byId.set(routine.id, routine);
+    }
 
-  const routinesBySegment = useMemo(() => {
-    const morning = routines.filter((routine) => {
-      const stepTimes = Array.from({ length: routine.activityStack.length }, (_, index) =>
-        routine.stepTimes?.[index] ?? routine.scheduledTime
-      );
-      return stepTimes.some((time) => isMorningTime(time));
+    for (const routine of routines) {
+      byId.set(routine.id, routine);
+    }
+
+    return Array.from(byId.values());
+  }, [bootstrapSnapshot, routines]);
+
+  const primaryRoutine = useMemo(
+    () => pickPrimaryRoutine(mergedRoutines, userId, segment),
+    [mergedRoutines, userId, segment]
+  );
+  const initialCompletion = primaryRoutine
+    ? bootstrapSnapshot?.completions[primaryRoutine.id] ?? null
+    : null;
+
+  const {
+    completedMorningIndexes,
+    completedEveningIndexes,
+    markStepDone,
+    loading: completionLoading,
+  } = useLocalDailyCompletion(
+    userId,
+    primaryRoutine?.id ?? '',
+    primaryRoutine?.childName,
+    initialCompletion
+  );
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function initialize() {
+      const user = await ensureAuth();
+      if (!mounted) return;
+      setUserId(user.uid);
+    }
+
+    initialize().catch((err) => {
+      console.warn('[Home] init failed:', err);
     });
-    const evening = routines.filter((routine) => {
-      const stepTimes = Array.from({ length: routine.activityStack.length }, (_, index) =>
-        routine.stepTimes?.[index] ?? routine.scheduledTime
-      );
-      return stepTimes.some((time) => !isMorningTime(time));
-    });
-    return { morning, evening };
-  }, [routines]);
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     const unsubscribe = subscribeAssetCacheStatus((next) => {
@@ -86,64 +190,119 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => {
-    let mounted = true;
-
-    async function initialize() {
-      const user = await ensureAuth();
-      const profile = await getChildProfile();
-      if (!mounted) return;
-
-      setUserId(user.uid);
-      if (profile?.childName) {
-        // kept for future personalization
+    const appStateSub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        setSegment(getCurrentSegment());
       }
-    }
-
-    initialize().catch((err) => {
-      console.warn('[Home] init failed:', err);
     });
 
     return () => {
-      mounted = false;
+      appStateSub.remove();
     };
   }, []);
 
-  if (loading) {
-    return (
-      <View style={styles.centered}>
-        <ActivityIndicator size="large" color="#5F8F86" />
-        <Text style={styles.loadingText}>Loading routines...</Text>
-      </View>
-    );
-  }
+  const visibleStepIndexes = useMemo(() => {
+    if (!primaryRoutine) return [] as number[];
 
-  if (error) {
-    return (
-      <View style={styles.centered}>
-        <Text style={styles.errorText}>Failed to load routines.</Text>
-        <Text style={styles.errorSub}>{error.message}</Text>
-      </View>
-    );
-  }
+    return primaryRoutine.activityStack
+      .map((_, index) => {
+        const time = primaryRoutine.stepTimes?.[index] ?? primaryRoutine.scheduledTime;
+        const stepIsMorning = isMorningTime(time);
+        if ((segment === 'morning' && stepIsMorning) || (segment === 'evening' && !stepIsMorning)) {
+          return index;
+        }
+        return -1;
+      })
+      .filter((index) => index >= 0);
+  }, [primaryRoutine, segment]);
 
-  const handleStart = (segment: 'morning' | 'evening') => {
-    if (routines.length === 0) {
-      Alert.alert('Create routine', 'Please create a routine first.');
-      router.push('/parent/create');
+  const completedIndexes = segment === 'morning' ? completedMorningIndexes : completedEveningIndexes;
+
+  useEffect(() => {
+    if (visibleStepIndexes.length === 0) {
+      setCurrentStepIndex(0);
       return;
     }
 
-    const targetRoutine = (segment === 'morning' ? routinesBySegment.morning[0] : routinesBySegment.evening[0])
-      ?? primaryRoutine;
+    if (!visibleStepIndexes.includes(currentStepIndex)) {
+      setCurrentStepIndex(visibleStepIndexes[0]);
+    }
+  }, [visibleStepIndexes, currentStepIndex]);
 
-    if (!targetRoutine) {
-      Alert.alert('No routines found', 'Please create a routine first.');
-      router.push('/parent/create');
-      return;
+  useEffect(() => {
+    if (!primaryRoutine) return;
+    const routine = primaryRoutine;
+
+    async function prepareAssets() {
+      setAssetsReady(false);
+      try {
+        if (isRoutineWarmed(routine.id)) {
+          setAssetsReady(true);
+          return;
+        }
+
+        const ready = await areAssetsReady(routine);
+        if (ready) {
+          markRoutineWarmed(routine.id, true);
+          setAssetsReady(true);
+          return;
+        }
+
+        const { missingAudioKeys } = await syncRoutineAssets(routine);
+        if (missingAudioKeys.length === 0) {
+          markRoutineWarmed(routine.id, true);
+          setAssetsReady(true);
+          return;
+        }
+
+        await ensureAudioForRoutine(routine);
+
+        let stillMissing = missingAudioKeys;
+        for (let attempt = 1; attempt <= 4; attempt += 1) {
+          await wait(1500);
+          const retry = await syncRoutineAssets(routine);
+          stillMissing = retry.missingAudioKeys;
+          if (stillMissing.length === 0) {
+            break;
+          }
+        }
+
+        if (stillMissing.length > 0) {
+          console.warn('[Home] Audio still pending after retries:', stillMissing);
+          markRoutineWarmed(routine.id, false);
+        } else {
+          markRoutineWarmed(routine.id, true);
+        }
+        setAssetsReady(true);
+      } catch (err) {
+        console.error('[Home] Asset prep error:', err);
+        markRoutineWarmed(routine.id, false);
+        setAssetsReady(true);
+      }
     }
 
-    router.push(`/routine/${targetRoutine.id}?segment=${segment}` as never);
-  };
+    prepareAssets();
+  }, [primaryRoutine]);
+
+  const allScopedDone = useMemo(() => {
+    if (visibleStepIndexes.length === 0) return false;
+    return visibleStepIndexes.every((index) => completedIndexes.has(index));
+  }, [visibleStepIndexes, completedIndexes]);
+
+  useEffect(() => {
+    if (!allScopedDone) return;
+    if (trophyShownThisSession[segment]) return;
+
+    setTrophyVisible(true);
+    setTrophyShownThisSession((prev) => ({ ...prev, [segment]: true }));
+  }, [allScopedDone, segment, trophyShownThisSession]);
+
+  const handleStepComplete = useCallback(async () => {
+    if (!primaryRoutine || visibleStepIndexes.length === 0) return;
+
+    await markStepDone(segment, currentStepIndex, visibleStepIndexes.length);
+    setViewMode('tasks');
+  }, [primaryRoutine, visibleStepIndexes, markStepDone, segment, currentStepIndex]);
 
   const measureMenuAnchor = () => {
     headerMenuButtonRef.current?.measureInWindow((x: number, y: number, width: number, height: number) => {
@@ -216,42 +375,51 @@ export default function HomeScreen() {
         left: fallbackLeft,
       };
 
-  const widthScale = Math.min(Math.max(windowWidth / 390, 0.86), 1.18);
-  const heightScale = Math.min(Math.max(windowHeight / 844, 0.85), 1.12);
-  const uiScale = Math.min(widthScale, heightScale);
+  if ((loading || completionLoading) && !primaryRoutine) {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator size="large" color="#5F8F86" />
+        <Text style={styles.loadingText}>Loading routines...</Text>
+      </View>
+    );
+  }
 
-  const panelHorizontalPadding = Math.round(22 * widthScale);
-  const panelCurve = Math.round(28 * widthScale);
-  const panelTopPadding = Math.round(16 * heightScale);
+  if (error) {
+    return (
+      <View style={styles.centered}>
+        <Text style={styles.errorText}>Failed to load routines.</Text>
+        <Text style={styles.errorSub}>{error.message}</Text>
+      </View>
+    );
+  }
 
-  const sectionTitleSize = Math.round(38 * uiScale);
-  const sectionTitleLineHeight = Math.round(42 * uiScale);
-  const sectionSubtitleSize = Math.round(16 * uiScale);
-  const starSize = Math.round(46 * uiScale);
+  if (!primaryRoutine) {
+    return (
+      <View style={styles.centered}>
+        <Text style={styles.errorText}>No routine found.</Text>
+        <TouchableOpacity style={styles.primaryButton} onPress={() => router.push('/parent/create')}>
+          <Text style={styles.primaryButtonText}>Create Routine</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
-  const ctaWidth = Math.max(188, Math.min(windowWidth - panelHorizontalPadding * 2 - 8, 360));
-  const ctaVerticalPadding = Math.round(Math.max(9, Math.min(12, 10 * uiScale)));
-  const ctaHorizontalPadding = Math.round(22 * widthScale);
-  const ctaFontSize = Math.round(18 * uiScale);
+  const isEvening = segment === 'evening';
+  const title = isEvening ? 'EVENING' : 'MORNING';
+  const subtitle = isEvening ? 'Time to wind down' : "Let's start the day!";
+  const hero = isEvening ? '🌙' : '☀️';
+  const completedCount = visibleStepIndexes.filter((index) => completedIndexes.has(index)).length;
 
-  const sunSize = Math.round(Math.max(132, Math.min(176, windowWidth * 0.42)));
-  const sunFaceSize = Math.round(sunSize * 0.67);
-  const sunRayTranslate = -Math.round(sunSize * 0.44);
-  const sunRayWide = Math.max(7, Math.round(8 * uiScale));
-  const sunRayNarrow = Math.max(6, Math.round(7 * uiScale));
-  const sunRayLong = Math.max(28, Math.round(34 * uiScale));
-  const sunRayShort = Math.max(24, Math.round(28 * uiScale));
-
-  const moonSize = Math.round(Math.max(132, Math.min(176, windowWidth * 0.41)));
-  const moonFontSize = Math.round(moonSize * 0.59);
+  const currentActivityStep = primaryRoutine.activityStack[currentStepIndex] ?? [];
+  const scopedPosition = Math.max(0, visibleStepIndexes.indexOf(currentStepIndex));
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, isEvening && styles.containerEvening]}>
       <Stack.Screen
         options={{
-          headerStyle: { backgroundColor: '#4A90D9' },
+          headerStyle: { backgroundColor: isEvening ? '#3F4C8F' : '#4A90D9' },
           headerTintColor: '#FFF',
-          headerTitleStyle: { fontFamily: roundedFontBold, fontSize: 17 },
+          headerTitleStyle: { fontFamily: roundedFontBold ?? 'System', fontSize: 17 },
           headerRight: () => (
             <TouchableOpacity
               ref={headerMenuButtonRef}
@@ -267,171 +435,110 @@ export default function HomeScreen() {
 
       <StatusBar barStyle="light-content" />
 
-      <View
-        style={[
-          styles.morningPanel,
-          {
-            paddingTop: topInset + panelTopPadding,
-            paddingHorizontal: panelHorizontalPadding,
-            borderBottomLeftRadius: panelCurve,
-            borderBottomRightRadius: panelCurve,
-          },
-        ]}
-      >
-        <View style={styles.starLayer} pointerEvents="none">
-          <Text style={[styles.morningStar, { top: 10, left: 24, fontSize: starSize }]}>★</Text>
-          <Text style={[styles.morningStar, { top: 30, right: 28, fontSize: starSize }]}>★</Text>
-          <Text style={[styles.morningStar, { top: 94, left: 70, fontSize: starSize }]}>★</Text>
-          <Text style={[styles.morningStar, { top: 130, right: 74, fontSize: starSize }]}>★</Text>
-        </View>
-
-        <Text style={[styles.morningTitle, { fontSize: sectionTitleSize, lineHeight: sectionTitleLineHeight }]}>MORNING</Text>
-        <Text style={[styles.morningSubtitle, { fontSize: sectionSubtitleSize }]}>Let's start the day!</Text>
-
-        <View style={[styles.sunGraphic, { width: sunSize, height: sunSize }]}> 
-          {Array.from({ length: 14 }).map((_, index) => (
-            <View
-              key={`ray-${index}`}
-              style={[
-                styles.sunRay,
-                {
-                  transform: [
-                    { rotate: `${index * 25.7 + (index % 2 === 0 ? -3 : 3)}deg` },
-                    { translateY: sunRayTranslate },
-                  ],
-                  borderLeftWidth: index % 2 === 0 ? sunRayWide : sunRayNarrow,
-                  borderRightWidth: index % 2 === 0 ? sunRayWide : sunRayNarrow,
-                  borderBottomWidth: index % 3 === 0 ? sunRayLong : sunRayShort,
-                  borderLeftColor: 'transparent',
-                  borderRightColor: 'transparent',
-                  borderTopColor: 'transparent',
-                  borderBottomColor: index % 2 === 0 ? '#F9C45D' : '#F6B94A',
-                  opacity: index % 5 === 0 ? 0.98 : 0.9,
-                },
-              ]}
-            />
-          ))}
-          <View
-            style={[
-              styles.sunFaceCircle,
-              {
-                width: sunFaceSize,
-                height: sunFaceSize,
-                borderRadius: sunFaceSize / 2,
-              },
-            ]}
-          >
-            <View style={[styles.sunFaceEyesRow, { width: Math.round(sunFaceSize * 0.46) }]}>
-              <View
-                style={[
-                  styles.sunEye,
-                  styles.sunEyeSoft,
-                  {
-                    width: Math.max(7, Math.round(sunFaceSize * 0.085)),
-                    height: Math.max(7, Math.round(sunFaceSize * 0.085)),
-                    borderRadius: Math.max(4, Math.round(sunFaceSize * 0.05)),
-                  },
-                ]}
-              />
-              <View
-                style={[
-                  styles.sunEye,
-                  styles.sunEyeSoft,
-                  {
-                    width: Math.max(7, Math.round(sunFaceSize * 0.085)),
-                    height: Math.max(7, Math.round(sunFaceSize * 0.085)),
-                    borderRadius: Math.max(4, Math.round(sunFaceSize * 0.05)),
-                  },
-                ]}
-              />
-            </View>
-            <View
-              style={[
-                styles.sunSmile,
-                {
-                  width: Math.round(sunFaceSize * 0.37),
-                  height: Math.round(sunFaceSize * 0.17),
-                  borderBottomLeftRadius: Math.round(sunFaceSize * 0.22),
-                  borderBottomRightRadius: Math.round(sunFaceSize * 0.22),
-                },
-              ]}
-            />
+      {viewMode === 'tasks' ? (
+        <View style={styles.tasksContainer}>
+          <View style={styles.tasksHeader}>
+            <Text style={styles.tasksTitle}>{title}</Text>
+            <Text style={styles.tasksHero}>{hero}</Text>
+            <Text style={styles.tasksSubtitle}>{subtitle}</Text>
+            <Text style={styles.tasksProgress}>
+              {completedCount} / {visibleStepIndexes.length}
+            </Text>
+            {cacheStage === 'warming-assets' ? (
+              <View style={styles.prepBadge}>
+                <Text style={styles.prepBadgeText}>Preparing media...</Text>
+              </View>
+            ) : null}
           </View>
+
+          <ScrollView contentContainerStyle={styles.tasksList}>
+            {visibleStepIndexes.map((index, listIdx) => {
+              const step = primaryRoutine.activityStack[index] ?? [];
+              const metas = step.map((key) => ACTIVITIES[key]).filter(Boolean);
+              const primaryLabel = metas[0]?.label ?? 'Task';
+              const emoji = metas.map((meta) => meta.emoji).join(' ') || '⭐';
+              const done = completedIndexes.has(index);
+              const primaryActivityKey = step[0] ?? '';
+              const durationMin =
+                TASK_DURATION_MINUTES[primaryActivityKey] ?? Math.max(5, step.length * 5);
+
+              return (
+                <TouchableOpacity
+                  key={`segment-step-${index}`}
+                  style={[styles.taskCard, done && styles.taskCardDone]}
+                  activeOpacity={0.9}
+                  onPress={() => {
+                    setCurrentStepIndex(index);
+                    setViewMode('player');
+                  }}
+                >
+                  <View style={styles.taskEmojiWrap}>
+                    <Text style={styles.taskEmoji}>{emoji}</Text>
+                  </View>
+
+                  <View style={styles.taskTextWrap}>
+                    <Text style={styles.taskTitle}>{listIdx + 1}. {primaryLabel}</Text>
+                    <Text style={styles.taskDuration}>{durationMin} min</Text>
+                  </View>
+
+                  <View style={[styles.checkWrap, done && styles.checkWrapDone]}>
+                    <Text style={[styles.checkText, done && styles.checkTextDone]}>
+                      {done ? '✓' : ''}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+
+            {visibleStepIndexes.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyTitle}>No tasks in this time block</Text>
+                <Text style={styles.emptySub}>Adjust step times in the questionnaire.</Text>
+              </View>
+            ) : null}
+          </ScrollView>
         </View>
+      ) : null}
 
-        <TouchableOpacity
-          style={[
-            styles.morningCta,
-            {
-              width: ctaWidth,
-              paddingVertical: ctaVerticalPadding,
-              paddingHorizontal: ctaHorizontalPadding,
-            },
-          ]}
-          onPress={() => handleStart('morning')}
-          activeOpacity={0.88}
-        >
-          <Text style={[styles.morningCtaText, { fontSize: ctaFontSize }]}>SHOW MORNING ROUTINES  →</Text>
-        </TouchableOpacity>
-      </View>
+      {viewMode === 'player' && assetsReady ? (
+        <>
+          <ActivityPlayer
+            key={currentStepIndex}
+            activityStep={currentActivityStep}
+            childName={primaryRoutine.childName}
+            avatarId={primaryRoutine.avatarId}
+            stepNumber={scopedPosition + 1}
+            totalSteps={visibleStepIndexes.length}
+            onComplete={handleStepComplete}
+          />
 
-      <View
-        style={[
-          styles.eveningPanel,
-          {
-            paddingHorizontal: panelHorizontalPadding,
-            paddingTop: panelTopPadding,
-            borderTopLeftRadius: panelCurve,
-            borderTopRightRadius: panelCurve,
-          },
-        ]}
-      >
-        <View style={styles.starLayer} pointerEvents="none">
-          <Text style={[styles.eveningStar, { top: 16, left: 26, fontSize: starSize }]}>★</Text>
-          <Text style={[styles.eveningStar, { top: 48, right: 30, fontSize: starSize }]}>★</Text>
-          <Text style={[styles.eveningStar, { top: 112, left: 74, fontSize: starSize }]}>★</Text>
-          <Text style={[styles.eveningStar, { top: 138, right: 92, fontSize: starSize }]}>★</Text>
-        </View>
+          <TouchableOpacity
+            style={styles.backToTasksBtn}
+            onPress={() => setViewMode('tasks')}
+            activeOpacity={0.9}
+          >
+            <Text style={styles.backToTasksText}>Back To Tasks</Text>
+          </TouchableOpacity>
+        </>
+      ) : null}
 
-        <Text style={[styles.eveningTitle, { fontSize: sectionTitleSize, lineHeight: sectionTitleLineHeight }]}>EVENING</Text>
-        <Text style={[styles.eveningSubtitle, { fontSize: sectionSubtitleSize }]}>Time to wind down</Text>
-
-        <View style={[styles.moonHalo, { width: moonSize, height: moonSize, borderRadius: moonSize / 2 }]}> 
-          <Text style={[styles.moonEmoji, { fontSize: moonFontSize }]}>🌙</Text>
-        </View>
-
-        <TouchableOpacity
-          style={[
-            styles.eveningCta,
-            {
-              width: ctaWidth,
-              paddingVertical: ctaVerticalPadding,
-              paddingHorizontal: ctaHorizontalPadding,
-            },
-          ]}
-          onPress={() => handleStart('evening')}
-          activeOpacity={0.88}
-        >
-          <Text style={[styles.eveningCtaText, { fontSize: ctaFontSize }]}>SHOW EVENING ROUTINES  →</Text>
-        </TouchableOpacity>
-      </View>
-
-      {cacheStage === 'warming-assets' ? (
-        <View style={[styles.prepBadge, { bottom: 20 + Math.max(insets.bottom, 8) }]}> 
-          <Text style={styles.prepBadgeText}>Preparing media...</Text>
+      {viewMode === 'player' && !assetsReady ? (
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color="#5F8F86" />
+          <Text style={styles.loadingText}>Preparing media...</Text>
+          <TouchableOpacity
+            style={[styles.primaryButton, { marginTop: 14 }]}
+            onPress={() => setViewMode('tasks')}
+            activeOpacity={0.9}
+          >
+            <Text style={styles.primaryButtonText}>Back To Tasks</Text>
+          </TouchableOpacity>
         </View>
       ) : null}
 
       <Modal visible={menuVisible} transparent animationType="none" onRequestClose={closeMenu}>
-        <Pressable style={styles.menuOverlayFull} onPress={closeMenu}>
-          <Animated.View
-            style={[
-              styles.menuPopover,
-              menuPosition,
-              { width: menuWidth },
-              menuAnimatedStyle,
-            ]}
-          >
+        <Pressable style={styles.menuOverlay} onPress={closeMenu}>
+          <Animated.View style={[styles.menuPopover, menuPosition, { width: menuWidth }, menuAnimatedStyle]}>
             <Text style={styles.menuTitle}>Menu</Text>
 
             <TouchableOpacity
@@ -458,7 +565,7 @@ export default function HomeScreen() {
               style={styles.menuItem}
               onPress={() => {
                 closeMenu();
-                router.push('/parent/create');
+                router.push('/parent/create' as never);
               }}
             >
               <Text style={styles.menuItemText}>Add Routine</Text>
@@ -467,6 +574,24 @@ export default function HomeScreen() {
         </Pressable>
       </Modal>
 
+      <Modal visible={trophyVisible} transparent animationType="fade" onRequestClose={() => setTrophyVisible(false)}>
+        <View style={styles.trophyOverlay}>
+          <View style={styles.trophyCard}>
+            <Text style={styles.trophyEmoji}>🏆</Text>
+            <Text style={styles.trophyTitle}>Amazing, {primaryRoutine.childName}!</Text>
+            <Text style={styles.trophySub}>You finished all {segment} tasks.</Text>
+            <TouchableOpacity
+              style={styles.primaryButton}
+              onPress={() => {
+                setTrophyVisible(false);
+                setViewMode('tasks');
+              }}
+            >
+              <Text style={styles.primaryButtonText}>Great Job</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -474,7 +599,264 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#2D3C6A',
+    backgroundColor: '#F3F0E2',
+  },
+  containerEvening: {
+    backgroundColor: '#E6EDF8',
+  },
+  centered: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FAFAFA',
+    padding: 24,
+  },
+  loadingText: {
+    marginTop: 14,
+    fontSize: 16,
+    color: '#5A6A64',
+  },
+  errorText: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#D65050',
+    marginBottom: 8,
+  },
+  errorSub: {
+    fontSize: 14,
+    color: '#6A6A6A',
+    textAlign: 'center',
+  },
+  tasksContainer: {
+    flex: 1,
+  },
+  tasksHeader: {
+    alignItems: 'center',
+    paddingTop: 22,
+    paddingBottom: 12,
+    paddingHorizontal: 16,
+  },
+  tasksTitle: {
+    fontSize: 44,
+    lineHeight: 48,
+    fontWeight: '800',
+    letterSpacing: 1.2,
+    color: '#6E8380',
+    fontFamily: roundedFontBold ?? 'System',
+  },
+  tasksHero: {
+    marginTop: 2,
+    fontSize: 66,
+  },
+  tasksSubtitle: {
+    marginTop: 4,
+    fontSize: 30,
+    color: '#5A6F6A',
+    fontFamily: roundedFontBold ?? 'System',
+  },
+  tasksProgress: {
+    marginTop: 6,
+    fontSize: 15,
+    color: '#6A7A78',
+    fontWeight: '600',
+  },
+  prepBadge: {
+    marginTop: 8,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: 99,
+    backgroundColor: '#FFF8D8',
+    borderWidth: 1,
+    borderColor: '#E8D28E',
+  },
+  prepBadgeText: {
+    fontSize: 12,
+    color: '#705E1A',
+    fontWeight: '700',
+  },
+  tasksList: {
+    paddingHorizontal: 14,
+    paddingTop: 8,
+    paddingBottom: 24 + 32,
+  },
+  taskCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    marginBottom: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E3E8E7',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  taskCardDone: {
+    backgroundColor: '#F4FBF5',
+  },
+  taskEmojiWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EDF5F3',
+    marginRight: 12,
+  },
+  taskEmoji: {
+    fontSize: 26,
+  },
+  taskTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  taskTitle: {
+    fontSize: 21,
+    color: '#1F2626',
+    fontFamily: roundedFontBold ?? 'System',
+  },
+  taskDuration: {
+    marginTop: 3,
+    fontSize: 13,
+    color: '#76807F',
+    fontWeight: '600',
+  },
+  checkWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 2,
+    borderColor: '#8CA3A1',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
+    backgroundColor: '#F7FBFA',
+  },
+  checkWrapDone: {
+    borderColor: '#7AA49B',
+    backgroundColor: '#E9F4F2',
+  },
+  checkText: {
+    fontSize: 20,
+    lineHeight: 22,
+    color: '#5D7E78',
+    fontWeight: '800',
+  },
+  checkTextDone: {
+    color: '#4F7F76',
+  },
+  backToTasksBtn: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 24,
+    borderRadius: 18,
+    backgroundColor: '#4A90D9',
+    alignItems: 'center',
+    paddingVertical: 12,
+  },
+  backToTasksText: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  menuOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.24)',
+  },
+  menuPopover: {
+    position: 'absolute',
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#E1E8E7',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.16,
+    shadowRadius: 14,
+    elevation: 8,
+  },
+  menuTitle: {
+    fontSize: 12,
+    color: '#8B9A98',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    fontWeight: '700',
+  },
+  menuItem: {
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  menuItemText: {
+    fontSize: 16,
+    color: '#233232',
+    fontWeight: '600',
+  },
+  trophyOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 18,
+  },
+  trophyCard: {
+    width: '100%',
+    maxWidth: 360,
+    borderRadius: 22,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 18,
+    paddingVertical: 22,
+    alignItems: 'center',
+  },
+  trophyEmoji: {
+    fontSize: 72,
+  },
+  trophyTitle: {
+    marginTop: 8,
+    fontSize: 28,
+    textAlign: 'center',
+    color: '#243231',
+    fontFamily: roundedFontBold ?? 'System',
+  },
+  trophySub: {
+    marginTop: 6,
+    marginBottom: 18,
+    fontSize: 16,
+    color: '#5E6F6E',
+    textAlign: 'center',
+  },
+  primaryButton: {
+    backgroundColor: '#4A90D9',
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+  },
+  primaryButtonText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: 28,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#536362',
+  },
+  emptySub: {
+    marginTop: 4,
+    fontSize: 14,
+    color: '#788583',
   },
   headerMenuButton: {
     width: 38,
@@ -491,269 +873,5 @@ const styles = StyleSheet.create({
     color: '#4C5D57',
     lineHeight: 22,
     fontFamily: roundedFontBold ?? 'System',
-  },
-  centered: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#EEF2E5',
-    padding: 24,
-  },
-  loadingText: {
-    marginTop: 12,
-    color: '#466761',
-    fontSize: 15,
-    fontFamily: roundedFont,
-  },
-  errorText: {
-    fontSize: 18,
-    color: '#8B2F2F',
-    fontFamily: roundedFontBold ?? 'System',
-    marginBottom: 8,
-  },
-  errorSub: {
-    fontSize: 14,
-    color: '#6C6C6C',
-    textAlign: 'center',
-    fontFamily: roundedFont,
-  },
-  morningPanel: {
-    flex: 1,
-    backgroundColor: '#EAF0E3',
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    paddingHorizontal: 22,
-    borderBottomLeftRadius: 28,
-    borderBottomRightRadius: 28,
-  },
-  eveningPanel: {
-    flex: 1,
-    backgroundColor: '#46519C',
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    paddingHorizontal: 22,
-    paddingTop: 16,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-  },
-  starLayer: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  morningStar: {
-    position: 'absolute',
-    color: '#FFFFFF',
-    fontSize: 46,
-    opacity: 0.2,
-  },
-  eveningStar: {
-    position: 'absolute',
-    color: '#E8EAFF',
-    fontSize: 46,
-    opacity: 0.16,
-  },
-  morningTitle: {
-    marginTop: 6,
-    fontSize: 38,
-    lineHeight: 42,
-    letterSpacing: 1,
-    color: '#6F8E87',
-    fontFamily: roundedFontBold ?? 'System',
-  },
-  morningSubtitle: {
-    marginTop: 2,
-    fontSize: 16,
-    color: '#507068',
-    fontFamily: roundedFont,
-  },
-  sunGraphic: {
-    width: 162,
-    height: 162,
-    marginTop: 12,
-    marginBottom: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  sunRay: {
-    position: 'absolute',
-    width: 0,
-    height: 0,
-    backgroundColor: 'transparent',
-    borderStyle: 'solid',
-  },
-  sunFaceCircle: {
-    width: 108,
-    height: 108,
-    borderRadius: 54,
-    backgroundColor: '#FFE07D',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: '#EAB74B',
-  },
-  sunFaceEyesRow: {
-    width: 50,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 4,
-  },
-  sunEye: {
-    width: 9,
-    height: 9,
-    borderRadius: 5,
-    backgroundColor: '#7A5B2D',
-  },
-  sunEyeSoft: {
-    opacity: 0.95,
-  },
-  sunSmile: {
-    width: 40,
-    height: 18,
-    borderBottomWidth: 4,
-    borderColor: '#7A5B2D',
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
-    marginTop: 10,
-  },
-  morningCta: {
-    borderRadius: 999,
-    backgroundColor: '#6A9D93',
-    minWidth: 208,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 22,
-    shadowColor: '#3E7169',
-    shadowOpacity: 0.25,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 3,
-  },
-  morningCtaText: {
-    color: '#F4FBF7',
-    fontSize: 18,
-    letterSpacing: 0.5,
-    fontFamily: roundedFontBold ?? 'System',
-  },
-  eveningTitle: {
-    marginTop: 4,
-    fontSize: 38,
-    lineHeight: 42,
-    letterSpacing: 1,
-    color: '#F7F8FF',
-    fontFamily: roundedFontBold ?? 'System',
-  },
-  eveningSubtitle: {
-    marginTop: 2,
-    fontSize: 16,
-    color: '#B5BDF6',
-    fontFamily: roundedFont,
-  },
-  moonHalo: {
-    marginTop: 16,
-    marginBottom: 16,
-    width: 156,
-    height: 156,
-    borderRadius: 78,
-    backgroundColor: '#3B458B',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#D9DCFF',
-    shadowOpacity: 0.35,
-    shadowRadius: 20,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 3,
-  },
-  moonEmoji: {
-    fontSize: 92,
-  },
-  eveningCta: {
-    borderRadius: 999,
-    backgroundColor: '#8F84D5',
-    minWidth: 208,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 22,
-    shadowColor: '#5A53A4',
-    shadowOpacity: 0.28,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 3,
-  },
-  eveningCtaText: {
-    color: '#F8F5FF',
-    fontSize: 18,
-    letterSpacing: 0.5,
-    fontFamily: roundedFontBold ?? 'System',
-  },
-  prepBadge: {
-    position: 'absolute',
-    alignSelf: 'center',
-    backgroundColor: '#FFF2C9',
-    borderWidth: 1,
-    borderColor: '#ECD896',
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  prepBadgeText: {
-    fontSize: 12,
-    color: '#6C5D2A',
-    fontFamily: roundedFontBold ?? 'System',
-  },
-  menuPopover: {
-    position: 'absolute',
-    minWidth: 176,
-    zIndex: 30,
-    borderRadius: 18,
-    backgroundColor: '#FBFAF3',
-    borderWidth: 1,
-    borderColor: '#E4DDC7',
-    padding: 12,
-  },
-  menuOverlayFull: {
-    flex: 1,
-    backgroundColor: 'transparent',
-  },
-  menuOverlay: {
-    flex: 1,
-    backgroundColor: '#00000055',
-    justifyContent: 'flex-start',
-    paddingTop: 84,
-    paddingHorizontal: 16,
-  },
-  menuSheet: {
-    borderRadius: 18,
-    backgroundColor: '#FBFAF3',
-    borderWidth: 1,
-    borderColor: '#E4DDC7',
-    padding: 14,
-  },
-  menuTitle: {
-    fontSize: 18,
-    color: '#3C3A33',
-    marginBottom: 8,
-    fontFamily: roundedFontBold ?? 'System',
-  },
-  menuItem: {
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#E8DFC3',
-    backgroundColor: '#FFFDF6',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginBottom: 8,
-  },
-  menuItemText: {
-    color: '#4A4438',
-    fontSize: 15,
-    fontFamily: roundedFont,
-  },
-  emptyRoutinesText: {
-    color: '#6D6756',
-    fontSize: 14,
-    fontFamily: roundedFont,
-    paddingHorizontal: 4,
-    paddingVertical: 8,
   },
 });

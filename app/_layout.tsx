@@ -17,8 +17,8 @@ export default function RootLayout() {
       };
 
       if (data?.routineId) {
-        // Deep-link directly to the active routine screen
-        router.push(`/routine/${data.routineId}`);
+        // Deep-link to the unified daily dashboard
+        router.push('/');
       }
     },
     []
@@ -78,7 +78,6 @@ export default function RootLayout() {
         <Stack.Screen name="onboarding" options={{ headerShown: false }} />
         <Stack.Screen name="index" options={{ title: 'Kids Routine Coach' }} />
         <Stack.Screen name="settings" options={{ title: 'Settings' }} />
-        <Stack.Screen name="routine/[id]" options={{ title: 'Active Routine', headerShown: false }} />
         <Stack.Screen name="parent/create" options={{ title: 'Create Routine' }} />
       </Stack>
     </GestureHandlerRootView>

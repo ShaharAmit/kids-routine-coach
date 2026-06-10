@@ -45,6 +45,23 @@ export interface ChildProfile {
   updatedAt: number;
 }
 
+/** Daily task completion state — stored in AsyncStorage only, never synced to Firestore */
+export interface LocalDailyCompletion {
+  date: string;      // 'YYYY-MM-DD' — used to detect day rollover
+  morning: number[]; // completed step indexes
+  evening: number[];
+}
+
+/** Written once to Firestore `daily_trophies` when a full segment completes */
+export interface DailyTrophy {
+  userId: string;
+  date: string;               // 'YYYY-MM-DD'
+  segment: 'morning' | 'evening';
+  routineId: string;
+  childName: string;
+  completedAt: null;          // serverTimestamp() on write
+}
+
 export interface AudioCacheEntry {
   id: string; // {normalizedName}_{activityKey}_{avatarId}_{tone}_{voice}
   audioUrl: string;

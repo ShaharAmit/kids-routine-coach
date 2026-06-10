@@ -5,6 +5,7 @@ import { storage } from './firebase';
 import { ensureAudioForRoutine } from './tts';
 import { Routine } from '../types';
 import { clearAllRoutineAssets, syncRoutineAssets } from './assetSync';
+import { clearHomeBootstrap, markRoutineWarmed } from './homeBootstrap';
 
 const WELCOME_VIDEO_STORAGE_PATH = 'avatars/default/welcome.mp4';
 
@@ -179,6 +180,7 @@ export function subscribeAssetCacheStatus(listener: (next: CacheStatus) => void)
 export async function preloadRoutineAssetsInBackground(routine: Routine): Promise<void> {
   if (isWarmupRunning) return;
   isWarmupRunning = true;
+  markRoutineWarmed(routine.id, false);
   status.stage = 'warming-assets';
   status.total = routine.activityStack.flat().length;
   status.ready = 0;
@@ -188,8 +190,10 @@ export async function preloadRoutineAssetsInBackground(routine: Routine): Promis
     await ensureAudioForRoutine(routine);
     const result = await syncRoutineAssets(routine);
     status.ready = status.total - result.missingAudioKeys.length;
+    markRoutineWarmed(routine.id, result.missingAudioKeys.length === 0);
   } catch {
     status.ready = 0;
+    markRoutineWarmed(routine.id, false);
   } finally {
     status.stage = 'done';
     emitStatus();
@@ -209,6 +213,7 @@ export async function clearAllLocalCachedAssets(): Promise<void> {
   }
 
   await AsyncStorage.removeItem(WELCOME_VIDEO_META_KEY);
+  clearHomeBootstrap();
 
   status.stage = 'idle';
   status.total = 0;

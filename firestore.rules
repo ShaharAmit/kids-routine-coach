@@ -23,5 +23,10 @@ service cloud.firestore {
     match /early_access/{leadId} {
       allow read, write: if false;
     }
+
+    // Daily trophy events — client writes when segment completes
+    match /daily_trophies/{docId} {
+      allow read, write: if true; // Lock to auth.uid before prod
+    }
   }
 }
