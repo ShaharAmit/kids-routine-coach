@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Animated,
   AppState,
+  Image,
   Modal,
   Platform,
   Pressable,
@@ -15,8 +16,10 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { router, Stack } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
 import ActivityPlayer from '../components/ActivityPlayer';
+import StarsBackground from '../components/StarsBackground';
+import CloudsBackground from '../components/CloudsBackground';
 import { ACTIVITIES } from '../constants/activities';
 import { useLocalDailyCompletion } from '../hooks/useLocalDailyCompletion';
 import { useUserRoutines } from '../hooks/useRoutine';
@@ -29,23 +32,28 @@ import { Routine } from '../types';
 
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-const TASK_DURATION_MINUTES: Record<string, number> = {
-  brush_teeth: 10,
-  get_dressed: 10,
-  eat_breakfast: 20,
-  put_shoes_on: 5,
-  tidy_room: 30,
-  wash_face: 10,
-  pack_backpack: 7,
-  put_on_pajamas: 10,
-  comb_hair: 10,
-  drink_water: 5,
-  use_toilet: 10,
-  read_book: 20,
-};
-
 const MORNING_START_MINUTES = 4 * 60;
 const EVENING_START_MINUTES = 15 * 60;
+
+const TASK_IMAGES: Record<string, ReturnType<typeof require>> = {
+  brush_teeth: require('../assets/images/3.png'),
+  get_dressed: require('../assets/images/4.png'),
+  put_on_pajamas: require('../assets/images/4.png'),
+  read_book: require('../assets/images/5.png'),
+  drink_water: require('../assets/images/6.png'),
+};
+
+const TASK_FALLBACK_IMAGE = require('../assets/images/7.png');
+
+const TASK_SUBTITLES: Record<string, string> = {
+  brush_teeth: "Let's make those teeth sparkle!",
+  get_dressed: 'Time for comfy cozy clothes',
+  put_on_pajamas: 'Time for comfy cozy clothes',
+  read_book: "Let's go on an adventure!",
+  drink_water: 'A little sip for sweet dreams',
+};
+
+const TASK_FALLBACK_SUBTITLE = 'Close your eyes and rest';
 
 function getCurrentSegment(): 'morning' | 'evening' {
   const now = new Date();
@@ -407,19 +415,19 @@ export default function HomeScreen() {
   const isEvening = segment === 'evening';
   const title = isEvening ? 'EVENING' : 'MORNING';
   const subtitle = isEvening ? 'Time to wind down' : "Let's start the day!";
-  const hero = isEvening ? '🌙' : '☀️';
   const completedCount = visibleStepIndexes.filter((index) => completedIndexes.has(index)).length;
 
   const currentActivityStep = primaryRoutine.activityStack[currentStepIndex] ?? [];
   const scopedPosition = Math.max(0, visibleStepIndexes.indexOf(currentStepIndex));
 
   return (
-    <View style={[styles.container, isEvening && styles.containerEvening]}>
+    <View style={[styles.container, isEvening ? styles.containerEvening : styles.containerMorning]}>
       <Stack.Screen
         options={{
-          headerStyle: { backgroundColor: isEvening ? '#3F4C8F' : '#4A90D9' },
-          headerTintColor: '#FFF',
-          headerTitleStyle: { fontFamily: roundedFontBold ?? 'System', fontSize: 17 },
+          headerStyle: { backgroundColor: isEvening ? '#0E1630' : '#c6e8e8' },
+          headerTintColor: isEvening ? '#FFF' : '#1E7B7B',
+          headerTitleStyle: { fontFamily: roundedFontBold ?? 'System', fontSize: 17, color: isEvening ? '#FFF' : '#1E7B7B' },
+          headerShadowVisible: false,
           headerRight: () => (
             <TouchableOpacity
               ref={headerMenuButtonRef}
@@ -427,76 +435,96 @@ export default function HomeScreen() {
               onPress={() => (menuVisible ? closeMenu() : openMenu())}
               activeOpacity={0.85}
             >
-              <Text style={styles.headerMenuIcon}>≡</Text>
+              <Text style={[styles.headerMenuIcon, !isEvening && styles.headerMenuIconMorning]}>≡</Text>
             </TouchableOpacity>
           ),
         }}
       />
 
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle={isEvening ? 'light-content' : 'dark-content'} />
 
       {viewMode === 'tasks' ? (
         <View style={styles.tasksContainer}>
-          <View style={styles.tasksHeader}>
-            <Text style={styles.tasksTitle}>{title}</Text>
-            <Text style={styles.tasksHero}>{hero}</Text>
-            <Text style={styles.tasksSubtitle}>{subtitle}</Text>
-            <Text style={styles.tasksProgress}>
-              {completedCount} / {visibleStepIndexes.length}
-            </Text>
-            {cacheStage === 'warming-assets' ? (
-              <View style={styles.prepBadge}>
-                <Text style={styles.prepBadgeText}>Preparing media...</Text>
-              </View>
-            ) : null}
+          {isEvening ? (
+            <>
+              <StarsBackground />
+              <Image source={require('../assets/images/moon.png')} style={styles.moon} resizeMode="contain" />
+            </>
+          ) : (
+            <>
+              <CloudsBackground />
+              <Image source={require('../assets/images/sun.png')} style={styles.sun} resizeMode="contain" />
+            </>
+          )}
+
+          <SafeAreaView style={styles.safeContent} edges={['bottom']}>
+            <View style={styles.tasksHeader}>
+              <Text style={[styles.tasksTitle, !isEvening && styles.tasksTitleMorning]}>{title}</Text>
+              <Text style={[styles.tasksSubtitle, !isEvening && styles.tasksSubtitleMorning]}>{subtitle}</Text>
+              <Text style={[styles.tasksProgress, !isEvening && styles.tasksProgressMorning]}>
+                {completedCount} / {visibleStepIndexes.length}
+              </Text>
+              {cacheStage === 'warming-assets' ? (
+                <View style={styles.prepBadge}>
+                  <Text style={styles.prepBadgeText}>Preparing media...</Text>
+                </View>
+              ) : null}
+            </View>
+
+            <View style={styles.cardWrap}>
+              <View style={[styles.card, !isEvening && styles.cardMorning]}>
+              <ScrollView contentContainerStyle={styles.tasksList} showsVerticalScrollIndicator={false}>
+                {visibleStepIndexes.map((index, listIdx) => {
+                  const step = primaryRoutine.activityStack[index] ?? [];
+                  const metas = step.map((key) => ACTIVITIES[key]).filter(Boolean);
+                  const primaryLabel = metas[0]?.label ?? 'Task';
+                  const done = completedIndexes.has(index);
+                  const primaryActivityKey = step[0] ?? '';
+                  const taskImage = TASK_IMAGES[primaryActivityKey] ?? TASK_FALLBACK_IMAGE;
+                  const taskSubtitle = TASK_SUBTITLES[primaryActivityKey] ?? TASK_FALLBACK_SUBTITLE;
+
+                  return (
+                    <TouchableOpacity
+                      key={`segment-step-${index}`}
+                      style={[styles.taskCard, done && styles.taskCardDone]}
+                      activeOpacity={0.9}
+                      onPress={() => {
+                        setCurrentStepIndex(index);
+                        setViewMode('player');
+                      }}
+                    >
+                      <View style={styles.taskImageWrap}>
+                        <Image source={taskImage} style={styles.taskImage} resizeMode="contain" />
+                      </View>
+
+                      <View style={styles.taskTextWrap}>
+                        <Text style={styles.taskTitle} numberOfLines={1}>
+                          {listIdx + 1}. {primaryLabel}
+                        </Text>
+                        <Text style={styles.taskSubtitle} numberOfLines={1}>
+                          {taskSubtitle}
+                        </Text>
+                      </View>
+
+                      <View style={[styles.checkWrap, done && styles.checkWrapDone]}>
+                        <Text style={[styles.checkText, done && styles.checkTextDone]}>
+                          {done ? '✓' : ''}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+
+                {visibleStepIndexes.length === 0 ? (
+                  <View style={styles.emptyState}>
+                    <Text style={styles.emptyTitle}>No tasks in this time block</Text>
+                    <Text style={styles.emptySub}>Adjust step times in the questionnaire.</Text>
+                  </View>
+                ) : null}
+              </ScrollView>
+            </View>
           </View>
-
-          <ScrollView contentContainerStyle={styles.tasksList}>
-            {visibleStepIndexes.map((index, listIdx) => {
-              const step = primaryRoutine.activityStack[index] ?? [];
-              const metas = step.map((key) => ACTIVITIES[key]).filter(Boolean);
-              const primaryLabel = metas[0]?.label ?? 'Task';
-              const emoji = metas.map((meta) => meta.emoji).join(' ') || '⭐';
-              const done = completedIndexes.has(index);
-              const primaryActivityKey = step[0] ?? '';
-              const durationMin =
-                TASK_DURATION_MINUTES[primaryActivityKey] ?? Math.max(5, step.length * 5);
-
-              return (
-                <TouchableOpacity
-                  key={`segment-step-${index}`}
-                  style={[styles.taskCard, done && styles.taskCardDone]}
-                  activeOpacity={0.9}
-                  onPress={() => {
-                    setCurrentStepIndex(index);
-                    setViewMode('player');
-                  }}
-                >
-                  <View style={styles.taskEmojiWrap}>
-                    <Text style={styles.taskEmoji}>{emoji}</Text>
-                  </View>
-
-                  <View style={styles.taskTextWrap}>
-                    <Text style={styles.taskTitle}>{listIdx + 1}. {primaryLabel}</Text>
-                    <Text style={styles.taskDuration}>{durationMin} min</Text>
-                  </View>
-
-                  <View style={[styles.checkWrap, done && styles.checkWrapDone]}>
-                    <Text style={[styles.checkText, done && styles.checkTextDone]}>
-                      {done ? '✓' : ''}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-
-            {visibleStepIndexes.length === 0 ? (
-              <View style={styles.emptyState}>
-                <Text style={styles.emptyTitle}>No tasks in this time block</Text>
-                <Text style={styles.emptySub}>Adjust step times in the questionnaire.</Text>
-              </View>
-            ) : null}
-          </ScrollView>
+          </SafeAreaView>
         </View>
       ) : null}
 
@@ -599,10 +627,13 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F3F0E2',
+    backgroundColor: '#c6e8e8',
+  },
+  containerMorning: {
+    backgroundColor: '#c6e8e8',
   },
   containerEvening: {
-    backgroundColor: '#E6EDF8',
+    backgroundColor: '#0E1630',
   },
   centered: {
     flex: 1,
@@ -630,6 +661,23 @@ const styles = StyleSheet.create({
   tasksContainer: {
     flex: 1,
   },
+  safeContent: {
+    flex: 1,
+  },
+  moon: {
+    position: 'absolute',
+    top: 8,
+    right: 14,
+    width: 96,
+    height: 96,
+  },
+  sun: {
+    position: 'absolute',
+    top: 6,
+    right: 12,
+    width: 104,
+    height: 104,
+  },
   tasksHeader: {
     alignItems: 'center',
     paddingTop: 22,
@@ -641,24 +689,29 @@ const styles = StyleSheet.create({
     lineHeight: 48,
     fontWeight: '800',
     letterSpacing: 1.2,
-    color: '#6E8380',
+    color: '#EAF0FF',
     fontFamily: roundedFontBold ?? 'System',
   },
-  tasksHero: {
-    marginTop: 2,
-    fontSize: 66,
+  tasksTitleMorning: {
+    color: '#1E4E79',
   },
   tasksSubtitle: {
     marginTop: 4,
     fontSize: 30,
-    color: '#5A6F6A',
+    color: '#B9C6E8',
     fontFamily: roundedFontBold ?? 'System',
+  },
+  tasksSubtitleMorning: {
+    color: '#356491',
   },
   tasksProgress: {
     marginTop: 6,
     fontSize: 15,
-    color: '#6A7A78',
+    color: '#8E9CC4',
     fontWeight: '600',
+  },
+  tasksProgressMorning: {
+    color: '#4E73A0',
   },
   prepBadge: {
     marginTop: 8,
@@ -674,10 +727,30 @@ const styles = StyleSheet.create({
     color: '#705E1A',
     fontWeight: '700',
   },
+  cardWrap: {
+    flex: 1,
+    paddingHorizontal: 18,
+    paddingTop: 6,
+    paddingBottom: 12,
+  },
+  card: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 28,
+    overflow: 'hidden',
+    shadowColor: '#0B2040',
+    shadowOpacity: 0.18,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 4,
+  },
+  cardMorning: {
+    backgroundColor: '#FFFFFF',
+  },
   tasksList: {
     paddingHorizontal: 14,
-    paddingTop: 8,
-    paddingBottom: 24 + 32,
+    paddingTop: 14,
+    paddingBottom: 24,
   },
   taskCard: {
     backgroundColor: '#FFFFFF',
@@ -687,28 +760,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#E3E8E7',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 2,
+    borderWidth: 1.5,
+    borderColor: '#D7EBEB',
+    borderStyle: 'dashed',
   },
   taskCardDone: {
     backgroundColor: '#F4FBF5',
+    borderColor: '#BFE3CF',
   },
-  taskEmojiWrap: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+  taskImageWrap: {
+    width: 60,
+    height: 60,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#EDF5F3',
     marginRight: 12,
   },
-  taskEmoji: {
-    fontSize: 26,
+  taskImage: {
+    width: 56,
+    height: 56,
   },
   taskTextWrap: {
     flex: 1,
@@ -716,13 +785,13 @@ const styles = StyleSheet.create({
   },
   taskTitle: {
     fontSize: 21,
-    color: '#1F2626',
+    color: '#1F4A52',
     fontFamily: roundedFontBold ?? 'System',
   },
-  taskDuration: {
+  taskSubtitle: {
     marginTop: 3,
-    fontSize: 13,
-    color: '#76807F',
+    fontSize: 14,
+    color: '#5E8A86',
     fontWeight: '600',
   },
   checkWrap: {
@@ -869,9 +938,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   headerMenuIcon: {
-    fontSize: 21,
-    color: '#4C5D57',
-    lineHeight: 22,
+    fontSize: 24,
+    color: '#FFFFFF',
+    lineHeight: 24,
     fontFamily: roundedFontBold ?? 'System',
+  },
+  headerMenuIconMorning: {
+    color: '#1E7B7B',
   },
 });
