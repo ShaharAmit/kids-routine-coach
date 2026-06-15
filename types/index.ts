@@ -17,6 +17,38 @@ export type VoiceOption = 'woman' | 'man';
 export type ChildGender = 'boy' | 'girl';
 export type ActivityStep = ActivityKey[];
 
+/** Setup questionnaire answers — collected during onboarding to personalize the routine */
+export type MorningStuckPoint =
+  | 'getting_out_of_bed'
+  | 'getting_dressed'
+  | 'brushing_washing'
+  | 'turning_off_screens'
+  | 'everything_negotiation';
+
+export type MotivationStyle =
+  | 'race_game'
+  | 'autonomy_choose'
+  | 'praise_encouragement'
+  | 'hug_connection';
+
+export type MasteredTask =
+  | 'eating_breakfast'
+  | 'choosing_clothes'
+  | 'putting_toys_away'
+  | 'none_yet';
+
+export type HelpLevel = 'independent' | 'little_push' | 'step_by_step';
+
+export type MorningSpeed = 'fast_energetic' | 'slow_dreamy' | 'easily_distracted';
+
+export interface QuestionnaireAnswers {
+  morningStuck?: MorningStuckPoint;
+  motivationStyle?: MotivationStyle;
+  masteredTask?: MasteredTask;
+  helpLevel?: HelpLevel;
+  morningSpeed?: MorningSpeed;
+}
+
 export interface Routine {
   id: string;
   userId: string;
@@ -42,6 +74,7 @@ export interface ChildProfile {
   scheduledTime: string;
   activityStack: ActivityStep[];
   stepTimes?: string[];
+  answers?: QuestionnaireAnswers;
   updatedAt: number;
 }
 

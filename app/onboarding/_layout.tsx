@@ -13,7 +13,7 @@ export default function OnboardingLayout() {
       <Stack.Screen name="welcome" options={{ title: 'Welcome', headerShown: false }} />
       <Stack.Screen
         name="questionnaire"
-        options={{ title: 'Setup Questionnaire', headerShown: true }}
+        options={{ title: 'Setup Questionnaire', headerShown: false }}
       />
     </Stack>
   );

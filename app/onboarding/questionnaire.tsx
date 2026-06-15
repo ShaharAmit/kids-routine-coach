@@ -1,9 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -11,234 +13,179 @@ import {
 } from 'react-native';
 import { router } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { ACTIVITY_KEYS, ACTIVITIES } from '../../constants/activities';
+import CloudsBackground from '../../components/CloudsBackground';
 import {
-  ActivityKey,
-  ActivityStep,
-  ChildGender,
   ChildProfile,
-  normalizeActivityStack,
-  normalizeStepTimes,
+  HelpLevel,
+  MasteredTask,
+  MorningSpeed,
+  MorningStuckPoint,
+  MotivationStyle,
+  QuestionnaireAnswers,
   Routine,
   ToneOption,
-  VoiceOption,
 } from '../../types';
 import { ensureAuth } from '../../services/firebase';
 import { saveRoutine } from '../../hooks/useRoutine';
 import { scheduleRoutineNotification } from '../../services/notifications';
-import { saveChildProfile } from '../../services/profile';
+import { saveChildProfile, getChildProfile } from '../../services/profile';
 import { preloadRoutineAssetsInBackground } from '../../services/assetCacheService';
-import { getChildProfile } from '../../services/profile';
 import { grantDebugHomeAccess } from '../../services/debugFlow';
 
-const ITEM_HEIGHT = 48;
+const GRASS = require('../../assets/images/grass.png');
 
-const TONES: Array<{ key: ToneOption; label: string }> = [
-  { key: 'cheerful', label: 'Cheerful 😄' },
-  { key: 'encouraging', label: 'Encouraging 💪' },
-  { key: 'calm', label: 'Calm 😌' },
+const DEFAULT_AVATAR_ID = 'avatar_boy_01';
+const DEFAULT_VOICE = 'woman' as const;
+const DEFAULT_SCHEDULED_TIME = '08:00';
+
+/** A standard morning routine used as the activity baseline for the generated routine. */
+const DEFAULT_ACTIVITY_STACK = [['get_dressed'], ['brush_teeth'], ['eat_breakfast']] as const;
+const DEFAULT_STEP_TIMES = ['07:30', '07:45', '08:00'];
+
+const MIN_AGE = 2;
+const MAX_AGE = 12;
+
+type Option<T extends string> = { key: T; label: string };
+
+const MORNING_STUCK_OPTIONS: Option<MorningStuckPoint>[] = [
+  { key: 'getting_out_of_bed', label: 'Getting out of bed' },
+  { key: 'getting_dressed', label: 'Getting dressed' },
+  { key: 'brushing_washing', label: 'Brushing teeth & washing' },
+  { key: 'turning_off_screens', label: 'Turning off screens' },
+  { key: 'everything_negotiation', label: 'Everything is a negotiation!' },
 ];
 
-const VOICES: Array<{ key: VoiceOption; label: string }> = [
-  { key: 'woman', label: 'Woman 👩' },
-  { key: 'man', label: 'Man 👨' },
+const MOTIVATION_OPTIONS: Option<MotivationStyle>[] = [
+  { key: 'race_game', label: 'Turning it into a race/game' },
+  { key: 'autonomy_choose', label: 'Giving them autonomy to choose' },
+  { key: 'praise_encouragement', label: 'Lots of praise and encouragement' },
+  { key: 'hug_connection', label: 'A warm hug and connection' },
 ];
 
-const GENDERS: Array<{ key: ChildGender; label: string; avatarId: string }> = [
-  { key: 'boy', label: 'Boy 👦', avatarId: 'avatar_boy_01' },
-  { key: 'girl', label: 'Girl 👧', avatarId: 'avatar_girl_01' },
+const MASTERED_OPTIONS: Option<MasteredTask>[] = [
+  { key: 'eating_breakfast', label: 'Eating breakfast' },
+  { key: 'choosing_clothes', label: 'Choosing clothes' },
+  { key: 'putting_toys_away', label: 'Putting toys away' },
+  { key: 'none_yet', label: "None yet — that's why I'm here!" },
 ];
 
-function buildTimeSlots(): string[] {
-  const slots: string[] = [];
-  for (let hour = 0; hour < 24; hour += 1) {
-    for (let minute = 0; minute < 60; minute += 15) {
-      const h = String(hour).padStart(2, '0');
-      const m = String(minute).padStart(2, '0');
-      slots.push(`${h}:${m}`);
-    }
+const HELP_OPTIONS: Option<HelpLevel>[] = [
+  { key: 'independent', label: '"I do it myself!" (Completely independent)' },
+  { key: 'little_push', label: 'Needs a little push to get started' },
+  { key: 'step_by_step', label: 'Needs me step-by-step' },
+];
+
+const SPEED_OPTIONS: Option<MorningSpeed>[] = [
+  { key: 'fast_energetic', label: 'Fast & energetic' },
+  { key: 'slow_dreamy', label: 'Slow and dreamy' },
+  { key: 'easily_distracted', label: 'Easily distracted' },
+];
+
+/** Map the motivation answer to the TTS tone used by the rest of the app. */
+function toneFromMotivation(style: MotivationStyle | undefined): ToneOption {
+  switch (style) {
+    case 'race_game':
+      return 'cheerful';
+    case 'hug_connection':
+      return 'calm';
+    case 'autonomy_choose':
+    case 'praise_encouragement':
+    default:
+      return 'encouraging';
   }
-  return slots;
 }
 
-function addMinutes(time: string, minutesToAdd: number): string {
-  const [hourStr, minuteStr] = time.split(':');
-  const hour = Number(hourStr);
-  const minute = Number(minuteStr);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return '08:00';
-
-  const total = ((hour * 60 + minute + minutesToAdd) % (24 * 60) + 24 * 60) % (24 * 60);
-  const h = String(Math.floor(total / 60)).padStart(2, '0');
-  const m = String(total % 60).padStart(2, '0');
-  return `${h}:${m}`;
-}
+// Step 0 = name + age, steps 1..5 = single-select questions. Final = trust screen.
+const QUESTION_STEP_COUNT = 6;
 
 export default function QuestionnaireScreen() {
-  const timeSlots = useMemo(buildTimeSlots, []);
-  const timeListRef = useRef<ScrollView>(null);
-
-  useEffect(() => {
-    console.log('[Questionnaire] mounted');
-  }, []);
+  const [stepIndex, setStepIndex] = useState(0);
+  const [showFinal, setShowFinal] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   const [childName, setChildName] = useState('');
-  const [childAge, setChildAge] = useState('6');
-  const [gender, setGender] = useState<ChildGender>('boy');
-  const [voice, setVoice] = useState<VoiceOption>('woman');
-  const [tone, setTone] = useState<ToneOption>('cheerful');
-  const [steps, setSteps] = useState<ActivityStep[]>([
-    ['brush_teeth'],
-    ['get_dressed'],
-    ['eat_breakfast'],
-  ]);
-  const [stepTimes, setStepTimes] = useState<string[]>(['08:00', '08:15', '08:30']);
-  const [mergeMode, setMergeMode] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [age, setAge] = useState(6);
+
+  const [answers, setAnswers] = useState<QuestionnaireAnswers>({});
 
   useEffect(() => {
     let mounted = true;
-
-    async function loadExistingProfile() {
-      const profile = await getChildProfile();
-      if (!profile || !mounted) return;
-
-      setChildName(profile.childName);
-      setChildAge(String(profile.age));
-      setGender(profile.gender);
-      setVoice(profile.voice);
-      setTone(profile.tone);
-      const normalized = normalizeActivityStack((profile as any).activityStack ?? []);
-      const nextSteps: ActivityStep[] = normalized.length > 0 ? normalized : [['brush_teeth']];
-      const fallbackTime = profile.scheduledTime ?? '08:00';
-      setSteps(nextSteps);
-      setStepTimes(normalizeStepTimes(profile.stepTimes, nextSteps, fallbackTime));
-    }
-
-    loadExistingProfile().catch((err) => {
-      console.warn('[Questionnaire] failed to load profile defaults:', err);
-    });
-
+    getChildProfile()
+      .then((profile) => {
+        if (!profile || !mounted) return;
+        setChildName(profile.childName);
+        setAge(profile.age);
+        if (profile.answers) setAnswers(profile.answers);
+      })
+      .catch((err) => console.warn('[Questionnaire] failed to load profile defaults:', err));
     return () => {
       mounted = false;
     };
   }, []);
 
-  const toggleActivity = useCallback((key: ActivityKey) => {
-    setSteps((prev) => {
-      const next = prev.map((step) => [...step]);
-      let found = false;
-      let removedIndex = -1;
+  const displayName = childName.trim() || 'your child';
 
-      for (let index = 0; index < next.length; index += 1) {
-        if (next[index].includes(key)) {
-          next[index] = next[index].filter((entry) => entry !== key);
-          removedIndex = index;
-          found = true;
-        }
-      }
+  const goBack = useCallback(() => {
+    if (showFinal) {
+      setShowFinal(false);
+      return;
+    }
+    if (stepIndex > 0) {
+      setStepIndex((prev) => prev - 1);
+      return;
+    }
+    router.back();
+  }, [showFinal, stepIndex]);
 
-      const cleaned: ActivityStep[] = [];
-      const nextTimes: string[] = [];
-      let cursor = 0;
-      for (let index = 0; index < next.length; index += 1) {
-        const step = next[index];
-        const prevTime = stepTimes[index] ?? stepTimes[cursor] ?? '08:00';
-        if (step.length > 0) {
-          cleaned.push(step);
-          nextTimes.push(prevTime);
-          cursor += 1;
-        }
-      }
+  const canContinue = useMemo(() => {
+    switch (stepIndex) {
+      case 0:
+        return childName.trim().length > 0 && age >= MIN_AGE && age <= MAX_AGE;
+      case 1:
+        return !!answers.morningStuck;
+      case 2:
+        return !!answers.motivationStyle;
+      case 3:
+        return !!answers.masteredTask;
+      case 4:
+        return !!answers.helpLevel;
+      case 5:
+        return !!answers.morningSpeed;
+      default:
+        return false;
+    }
+  }, [stepIndex, childName, age, answers]);
 
-      if (found) {
-        setStepTimes(nextTimes);
-        return cleaned;
-      }
-
-      const lastTime = nextTimes[nextTimes.length - 1] ?? stepTimes[removedIndex] ?? '08:00';
-      setStepTimes([...nextTimes, addMinutes(lastTime, 15)]);
-      return [...cleaned, [key]];
-    });
-  }, [stepTimes]);
-
-  const allSelectedKeys = useMemo(() => new Set(steps.flat()), [steps]);
-
-  const moveStep = useCallback((from: number, to: number) => {
-    if (to < 0 || to >= steps.length || from === to) return;
-
-    setSteps((prev) => {
-      const next = [...prev];
-      const [moved] = next.splice(from, 1);
-      next.splice(to, 0, moved);
-      return next;
-    });
-
-    setStepTimes((prev) => {
-      const next = [...prev];
-      const [moved] = next.splice(from, 1);
-      next.splice(to, 0, moved ?? '08:00');
-      return normalizeStepTimes(next, steps, '08:00');
-    });
-  }, [steps]);
-
-  const mergeStepWithAbove = useCallback((index: number) => {
-    if (index <= 0 || index >= steps.length) return;
-
-    setSteps((prev) => {
-      const next = [...prev];
-      const merged = Array.from(new Set([...(next[index - 1] ?? []), ...(next[index] ?? [])]));
-      next.splice(index - 1, 2, merged);
-      return next;
-    });
-
-    setStepTimes((prev) => {
-      const next = [...prev];
-      const mergedTime = next[index - 1] ?? next[index] ?? '08:00';
-      next.splice(index - 1, 2, mergedTime);
-      return next;
-    });
-  }, [steps.length]);
-
-  const selectedAvatarId = useMemo(
-    () => GENDERS.find((entry) => entry.key === gender)?.avatarId ?? 'avatar_boy_01',
-    [gender]
-  );
-
-  const primaryTime = stepTimes[0] ?? '08:00';
+  const handleContinue = useCallback(() => {
+    if (!canContinue) return;
+    if (stepIndex < QUESTION_STEP_COUNT - 1) {
+      setStepIndex((prev) => prev + 1);
+    } else {
+      setShowFinal(true);
+    }
+  }, [canContinue, stepIndex]);
 
   const saveQuestionnaire = useCallback(async () => {
-    if (!childName.trim()) {
-      Alert.alert('Missing name', "Please enter your child's name.");
-      return;
-    }
-
-    const parsedAge = Number(childAge);
-    if (!Number.isFinite(parsedAge) || parsedAge <= 1 || parsedAge >= 18) {
-      Alert.alert('Invalid age', 'Please enter a valid age between 2 and 17.');
-      return;
-    }
-
-    if (steps.length === 0) {
-      Alert.alert('No activities selected', 'Please select at least one activity.');
-      return;
-    }
-
+    if (saving) return;
     setSaving(true);
     try {
       const user = await ensureAuth();
       const userId = user.uid;
+      const tone = toneFromMotivation(answers.motivationStyle);
+      const activityStack = DEFAULT_ACTIVITY_STACK.map((step) => [...step]);
 
       const profile: ChildProfile = {
         userId,
         childName: childName.trim(),
-        age: parsedAge,
-        gender,
-        avatarId: selectedAvatarId,
-        voice,
+        age,
+        gender: 'boy',
+        avatarId: DEFAULT_AVATAR_ID,
+        voice: DEFAULT_VOICE,
         tone,
-        scheduledTime: primaryTime,
-        activityStack: steps,
-        stepTimes: normalizeStepTimes(stepTimes, steps, primaryTime),
+        scheduledTime: DEFAULT_SCHEDULED_TIME,
+        activityStack,
+        stepTimes: [...DEFAULT_STEP_TIMES],
+        answers,
         updatedAt: Date.now(),
       };
 
@@ -246,13 +193,13 @@ export default function QuestionnaireScreen() {
         id: `routine_${userId}`,
         userId,
         childName: profile.childName,
-        childAge: parsedAge,
-        avatarId: selectedAvatarId,
-        scheduledTime: primaryTime,
-        activityStack: steps,
-        stepTimes: normalizeStepTimes(stepTimes, steps, primaryTime),
+        childAge: age,
+        avatarId: DEFAULT_AVATAR_ID,
+        scheduledTime: DEFAULT_SCHEDULED_TIME,
+        activityStack,
+        stepTimes: [...DEFAULT_STEP_TIMES],
         tone,
-        voice,
+        voice: DEFAULT_VOICE,
       };
 
       await saveRoutine(routine);
@@ -269,391 +216,593 @@ export default function QuestionnaireScreen() {
     } catch (err) {
       console.warn('[Questionnaire] failed to save:', err);
       Alert.alert('Save failed', 'Could not save setup. Please try again.');
-    } finally {
       setSaving(false);
     }
-  }, [childAge, childName, gender, primaryTime, selectedAvatarId, stepTimes, steps, tone, voice]);
+  }, [age, answers, childName, saving]);
 
   return (
-    <SafeAreaView style={styles.container} edges={['bottom']}>
-      <ScrollView style={styles.container} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-      <Text style={styles.title}>Child Setup Questionnaire</Text>
+    <View style={styles.root}>
+      <CloudsBackground />
+      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+        <KeyboardAvoidingView
+          style={styles.flex}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          {/* Header */}
+          <View style={styles.header}>
+            <TouchableOpacity style={styles.backButton} onPress={goBack} hitSlop={10}>
+              <Text style={styles.backChevron}>‹</Text>
+            </TouchableOpacity>
+            <Text style={styles.headerTitle}>Setup Questionnaire</Text>
+            <View style={styles.headerSpacer} />
+          </View>
 
-      <Text style={styles.section}>Child name</Text>
-      <TextInput
-        value={childName}
-        onChangeText={setChildName}
-        style={styles.input}
-        placeholder="Name"
-        autoCapitalize="words"
-      />
+          {!showFinal && (
+            <View style={styles.progressWrap}>
+              <View style={styles.dotsRow}>
+                {Array.from({ length: QUESTION_STEP_COUNT }).map((_, index) => {
+                  const active = index === stepIndex;
+                  const done = index < stepIndex;
+                  return (
+                    <React.Fragment key={index}>
+                      {index > 0 && <View style={styles.dotConnector} />}
+                      <View
+                        style={[styles.dot, active && styles.dotActive, done && styles.dotDone]}
+                      />
+                    </React.Fragment>
+                  );
+                })}
+              </View>
+              <Text style={styles.progressLabel}>
+                {stepIndex + 1} of {QUESTION_STEP_COUNT}
+              </Text>
+            </View>
+          )}
 
-      <Text style={styles.section}>Age</Text>
-      <TextInput
-        value={childAge}
-        onChangeText={setChildAge}
-        style={styles.input}
-        keyboardType="number-pad"
-        maxLength={2}
-      />
+          {/* Body */}
+          {showFinal ? (
+            <FinalCard name={displayName} saving={saving} onStart={saveQuestionnaire} />
+          ) : (
+            <View style={styles.cardWrap}>
+              <View style={styles.card}>
+                <ScrollView
+                  style={styles.cardBody}
+                  contentContainerStyle={styles.cardScroll}
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={false}
+                >
+                  {stepIndex === 0 && (
+                    <NameAgeStep
+                      childName={childName}
+                      onChangeName={setChildName}
+                      age={age}
+                      onChangeAge={(next) => setAge(Math.max(MIN_AGE, Math.min(MAX_AGE, next)))}
+                    />
+                  )}
 
-      <Text style={styles.section}>Boy or girl</Text>
-      <View style={styles.optionsRow}>
-        {GENDERS.map((entry) => (
-          <TouchableOpacity
-            key={entry.key}
-            onPress={() => setGender(entry.key)}
-            style={[styles.optionChip, gender === entry.key && styles.optionChipSelected]}
-          >
-            <Text style={styles.optionChipText}>{entry.label}</Text>
-          </TouchableOpacity>
-        ))}
+                  {stepIndex === 1 && (
+                    <SelectStep
+                      title={'Where do mornings usually get "stuck"?'}
+                      options={MORNING_STUCK_OPTIONS}
+                      selected={answers.morningStuck}
+                      onSelect={(key) => setAnswers((a) => ({ ...a, morningStuck: key }))}
+                    />
+                  )}
+
+                  {stepIndex === 2 && (
+                    <SelectStep
+                      title={`When ${displayName} is dragging their feet, what helps most?`}
+                      options={MOTIVATION_OPTIONS}
+                      selected={answers.motivationStyle}
+                      onSelect={(key) => setAnswers((a) => ({ ...a, motivationStyle: key }))}
+                    />
+                  )}
+
+                  {stepIndex === 3 && (
+                    <SelectStep
+                      title={`What is a routine task ${displayName} already does like a pro?`}
+                      options={MASTERED_OPTIONS}
+                      selected={answers.masteredTask}
+                      onSelect={(key) => setAnswers((a) => ({ ...a, masteredTask: key }))}
+                    />
+                  )}
+
+                  {stepIndex === 4 && (
+                    <SelectStep
+                      title={`How much help does ${displayName} usually need in the morning?`}
+                      options={HELP_OPTIONS}
+                      selected={answers.helpLevel}
+                      onSelect={(key) => setAnswers((a) => ({ ...a, helpLevel: key }))}
+                    />
+                  )}
+
+                  {stepIndex === 5 && (
+                    <SelectStep
+                      title={`What is ${displayName}'s natural morning speed?`}
+                      options={SPEED_OPTIONS}
+                      selected={answers.morningSpeed}
+                      onSelect={(key) => setAnswers((a) => ({ ...a, morningSpeed: key }))}
+                    />
+                  )}
+                </ScrollView>
+                <View style={styles.grassScene} pointerEvents="none">
+                  <Image source={GRASS} style={styles.grass} resizeMode="stretch" />
+                </View>
+              </View>
+
+              <TouchableOpacity
+                style={[styles.continueButton, !canContinue && styles.continueButtonDisabled]}
+                onPress={handleContinue}
+                disabled={!canContinue}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.continueText}>Continue</Text>
+                <Text style={styles.continueArrow}>→</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    </View>
+  );
+}
+
+function NameAgeStep({
+  childName,
+  onChangeName,
+  age,
+  onChangeAge,
+}: {
+  childName: string;
+  onChangeName: (value: string) => void;
+  age: number;
+  onChangeAge: (value: number) => void;
+}) {
+  return (
+    <View>
+      <Text style={styles.cardTitle}>
+        <Text style={styles.heartIcon}>💙 </Text>
+        Hi! Let's get to know your child
+      </Text>
+
+      <Text style={styles.fieldLabel}>What's their name?</Text>
+      <View style={styles.inputRow}>
+        <Text style={styles.inputIcon}>👤</Text>
+        <TextInput
+          value={childName}
+          onChangeText={onChangeName}
+          style={styles.input}
+          placeholder="Name"
+          placeholderTextColor="#9CB8B8"
+          autoCapitalize="words"
+          returnKeyType="done"
+        />
       </View>
 
-      <Text style={styles.section}>Voice</Text>
-      <View style={styles.optionsRow}>
-        {VOICES.map((entry) => (
+      <Text style={[styles.fieldLabel, { marginTop: 22 }]}>How old are they?</Text>
+      <View style={styles.inputRow}>
+        <Text style={styles.inputIcon}>📅</Text>
+        <Text style={styles.ageValue}>{age}</Text>
+        <View style={styles.stepperGroup}>
           <TouchableOpacity
-            key={entry.key}
-            onPress={() => setVoice(entry.key)}
-            style={[styles.optionChip, voice === entry.key && styles.optionChipSelected]}
+            style={styles.stepperButton}
+            onPress={() => onChangeAge(age - 1)}
+            hitSlop={8}
           >
-            <Text style={styles.optionChipText}>{entry.label}</Text>
+            <Text style={styles.stepperText}>−</Text>
           </TouchableOpacity>
-        ))}
+          <View style={styles.stepperDivider} />
+          <TouchableOpacity
+            style={styles.stepperButton}
+            onPress={() => onChangeAge(age + 1)}
+            hitSlop={8}
+          >
+            <Text style={styles.stepperText}>+</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
-      <Text style={styles.section}>Tone</Text>
-      <View style={styles.optionsRow}>
-        {TONES.map((entry) => (
-          <TouchableOpacity
-            key={entry.key}
-            onPress={() => setTone(entry.key)}
-            style={[styles.optionChip, tone === entry.key && styles.optionChipSelected]}
-          >
-            <Text style={styles.optionChipText}>{entry.label}</Text>
-          </TouchableOpacity>
-        ))}
+      <View style={styles.helperRow}>
+        <Text style={styles.heartIconSmall}>💙</Text>
+        <Text style={styles.helperText}>
+          This helps Kido Coach personalize the experience for your child
+        </Text>
       </View>
+    </View>
+  );
+}
 
-      <Text style={styles.section}>Select activities needing help</Text>
-      <View style={styles.grid}>
-        {ACTIVITY_KEYS.map((key) => {
-          const typedKey = key as ActivityKey;
-          const item = ACTIVITIES[key];
-          const selected = allSelectedKeys.has(typedKey);
+function SelectStep<T extends string>({
+  title,
+  options,
+  selected,
+  onSelect,
+}: {
+  title: string;
+  options: Option<T>[];
+  selected: T | undefined;
+  onSelect: (key: T) => void;
+}) {
+  return (
+    <View>
+      <Text style={styles.cardTitle}>{title}</Text>
+      <View style={styles.optionsList}>
+        {options.map((option) => {
+          const active = selected === option.key;
           return (
             <TouchableOpacity
-              key={key}
-              style={[styles.gridItem, selected && styles.gridItemSelected]}
-              onPress={() => toggleActivity(typedKey)}
+              key={option.key}
+              style={[styles.option, active && styles.optionSelected]}
+              onPress={() => onSelect(option.key)}
+              activeOpacity={0.85}
             >
-              <Text style={styles.gridEmoji}>{item.emoji}</Text>
-              <Text style={styles.gridLabel}>{item.label}</Text>
+              <View style={[styles.radio, active && styles.radioSelected]}>
+                {active && <View style={styles.radioInner} />}
+              </View>
+              <Text style={[styles.optionLabel, active && styles.optionLabelSelected]}>
+                {option.label}
+              </Text>
             </TouchableOpacity>
           );
         })}
       </View>
-
-      <View style={styles.mergeRow}>
-        <Text style={styles.section}>Merge mode</Text>
-        <Switch value={mergeMode} onValueChange={setMergeMode} />
-      </View>
-      <Text style={styles.helpText}>
-        Use arrows to reorder. Turn merge mode on to show "Merge Up" buttons.
-      </Text>
-
-      <View style={styles.stepsWrap}>
-        {steps.map((item, index) => {
-          const labels = item.map((key) => ACTIVITIES[key].label).join(' + ');
-          const emojis = item.map((key) => ACTIVITIES[key].emoji).join(' ');
-          const stepTime = stepTimes[index] ?? '08:00';
-
-          return (
-            <View key={`step_${index}_${item.join('_')}`} style={styles.stepRow}>
-              <Text style={styles.stepDrag}>{index + 1}</Text>
-              <View style={styles.stepMeta}>
-                <Text style={styles.stepEmoji}>{emojis}</Text>
-                <Text style={styles.stepLabel}>{labels}</Text>
-                <TouchableOpacity
-                  style={styles.timeBadge}
-                  onPress={() => {
-                    setStepTimes((prev) => {
-                      const next = [...prev];
-                      next[index] = addMinutes(next[index] ?? '08:00', 15);
-                      return next;
-                    });
-                  }}
-                >
-                  <Text style={styles.timeBadgeText}>🕒 {stepTime}</Text>
-                </TouchableOpacity>
-              </View>
-
-              <View style={styles.stepActions}>
-                <TouchableOpacity style={styles.smallButton} onPress={() => moveStep(index, index - 1)}>
-                  <Text style={styles.smallButtonText}>↑</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.smallButton} onPress={() => moveStep(index, index + 1)}>
-                  <Text style={styles.smallButtonText}>↓</Text>
-                </TouchableOpacity>
-                {mergeMode && index > 0 ? (
-                  <TouchableOpacity style={styles.smallButton} onPress={() => mergeStepWithAbove(index)}>
-                    <Text style={styles.smallButtonText}>Merge Up</Text>
-                  </TouchableOpacity>
-                ) : null}
-                {item.length > 1 ? (
-                  <TouchableOpacity
-                    style={styles.smallButton}
-                    onPress={() => {
-                      setSteps((prev) => {
-                        const next = [...prev];
-                        next.splice(index, 1, ...item.map((entry) => [entry] as ActivityStep));
-                        return next;
-                      });
-                      setStepTimes((prevTimes) => {
-                        const current = prevTimes[index] ?? '08:00';
-                        const nextTimes = [...prevTimes];
-                        nextTimes.splice(index, 1, ...item.map(() => current));
-                        return nextTimes;
-                      });
-                    }}
-                  >
-                    <Text style={styles.smallButtonText}>Unmerge</Text>
-                  </TouchableOpacity>
-                ) : null}
-              </View>
-            </View>
-          );
-        })}
-      </View>
-
-        <Text style={styles.section}>Step times</Text>
-        <Text style={styles.helpText}>Tap a time chip on any step to move it forward by 15 minutes.</Text>
-        <View style={styles.timePicker}>
-          <ScrollView
-            ref={timeListRef}
-            showsVerticalScrollIndicator={false}
-            snapToInterval={ITEM_HEIGHT}
-            decelerationRate="fast"
-            contentOffset={{ x: 0, y: ITEM_HEIGHT * 32 }}
-            onMomentumScrollEnd={(event) => {
-              const index = Math.round(event.nativeEvent.contentOffset.y / ITEM_HEIGHT);
-              const safeIndex = Math.max(0, Math.min(timeSlots.length - 1, index));
-              const nextTime = timeSlots[safeIndex];
-              setStepTimes((prev) => {
-                if (prev.length === 0) return [nextTime];
-                const offset =
-                  (Number(nextTime.split(':')[0]) * 60 + Number(nextTime.split(':')[1])) -
-                  (Number((prev[0] ?? '08:00').split(':')[0]) * 60 + Number((prev[0] ?? '08:00').split(':')[1]));
-                return prev.map((entry) => addMinutes(entry, offset));
-              });
-            }}
-          >
-            {timeSlots.map((item) => (
-              <View key={item} style={styles.timeItem}>
-                <Text style={(stepTimes[0] ?? '08:00') === item ? styles.timeTextSelected : styles.timeText}>
-                  {item}
-                </Text>
-              </View>
-            ))}
-          </ScrollView>
-        </View>
-
-        <TouchableOpacity
-          style={[styles.saveButton, saving && { opacity: 0.6 }]}
-          disabled={saving}
-          onPress={saveQuestionnaire}
-        >
-          <Text style={styles.saveButtonText}>{saving ? 'Saving...' : 'Save Setup'}</Text>
-        </TouchableOpacity>
-      </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
+function FinalCard({
+  name,
+  saving,
+  onStart,
+}: {
+  name: string;
+  saving: boolean;
+  onStart: () => void;
+}) {
+  return (
+    <View style={styles.cardWrap}>
+      <View style={styles.card}>
+        <View style={styles.finalContent}>
+          <Text style={styles.finalEmoji}>🎉</Text>
+          <Text style={styles.finalTitle}>Awesome!</Text>
+          <Text style={styles.finalBody}>
+            Becky is customizing a routine specifically to help{' '}
+            <Text style={styles.finalName}>{name}</Text> build independence, while leaving plenty
+            of time for the things they love.
+          </Text>
+          <Text style={styles.finalCta}>Let's go!</Text>
+        </View>
+        <View style={styles.grassScene} pointerEvents="none">
+          <Image source={GRASS} style={styles.grass} resizeMode="stretch" />
+        </View>
+      </View>
+
+      <TouchableOpacity
+        style={[styles.continueButton, saving && styles.continueButtonDisabled]}
+        onPress={onStart}
+        disabled={saving}
+        activeOpacity={0.85}
+      >
+        <Text style={styles.continueText}>{saving ? 'Setting up…' : "Let's go!"}</Text>
+        {!saving && <Text style={styles.continueArrow}>→</Text>}
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+const TEAL_DARK = '#1E7B7B';
+const TEAL = '#3FA9A0';
+
 const styles = StyleSheet.create({
-  container: {
+  root: {
     flex: 1,
-    backgroundColor: '#F4F7FB',
+    backgroundColor: '#c6e8e8',
   },
-  content: {
-    padding: 18,
-    paddingBottom: 60,
+  flex: {
+    flex: 1,
   },
-  title: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: '#1A2533',
-    marginBottom: 10,
+  safe: {
+    flex: 1,
   },
-  section: {
-    marginTop: 14,
-    marginBottom: 8,
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#334155',
-  },
-  input: {
-    backgroundColor: '#FFF',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#D7E0EA',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 16,
-  },
-  optionsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  optionChip: {
-    backgroundColor: '#FFF',
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-  },
-  optionChipSelected: {
-    borderColor: '#4A90D9',
-    backgroundColor: '#E7F1FD',
-  },
-  optionChipText: {
-    color: '#1F2937',
-    fontWeight: '700',
-  },
-  grid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  gridItem: {
-    width: '48%',
-    backgroundColor: '#FFF',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#D7E0EA',
-    padding: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  gridItemSelected: {
-    borderColor: '#4A90D9',
-    backgroundColor: '#EAF4FF',
-  },
-  gridEmoji: {
-    fontSize: 18,
-  },
-  gridLabel: {
-    fontSize: 13,
-    color: '#334155',
-    fontWeight: '700',
-    flexShrink: 1,
-  },
-  mergeRow: {
-    marginTop: 12,
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    paddingHorizontal: 18,
+    paddingTop: 6,
   },
-  helpText: {
-    color: '#64748B',
-    fontSize: 12,
-    marginBottom: 8,
-  },
-  stepsWrap: {
-    marginBottom: 10,
-  },
-  stepRow: {
+  backButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#D7E0EA',
-    padding: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#0B5757',
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  headerSpacer: {
+    width: 44,
+    height: 44,
+  },
+  backChevron: {
+    fontSize: 28,
+    lineHeight: 30,
+    color: TEAL_DARK,
+    fontWeight: '700',
+    marginTop: -2,
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: TEAL_DARK,
+  },
+  progressWrap: {
+    alignItems: 'center',
+    marginTop: 14,
     marginBottom: 8,
+  },
+  dotsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
   },
-  stepDrag: {
-    fontSize: 20,
-    color: '#64748B',
+  dot: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    backgroundColor: 'transparent',
   },
-  stepMeta: {
+  dotActive: {
+    backgroundColor: TEAL_DARK,
+    borderColor: TEAL_DARK,
+  },
+  dotDone: {
+    backgroundColor: '#FFFFFF',
+  },
+  dotConnector: {
+    width: 26,
+    height: 2,
+    backgroundColor: '#FFFFFF',
+  },
+  progressLabel: {
+    marginTop: 10,
+    fontSize: 15,
+    fontWeight: '700',
+    color: TEAL_DARK,
+  },
+  cardWrap: {
     flex: 1,
+    paddingHorizontal: 18,
+    paddingTop: 12,
+    paddingBottom: 12,
   },
-  stepEmoji: {
-    fontSize: 17,
-    marginBottom: 2,
-  },
-  stepLabel: {
-    fontSize: 13,
-    color: '#1F2937',
-    fontWeight: '700',
-  },
-  timeBadge: {
-    marginTop: 6,
-    alignSelf: 'flex-start',
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    backgroundColor: '#EEF2FF',
-  },
-  timeBadgeText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#334155',
-  },
-  stepActions: {
-    gap: 6,
-    alignItems: 'flex-end',
-  },
-  smallButton: {
-    backgroundColor: '#EEF2FF',
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  smallButtonText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#334155',
-  },
-  timePicker: {
-    height: 180,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#D7E0EA',
-    backgroundColor: '#FFF',
+  card: {
+    flex: 1,
+    flexDirection: 'column',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 28,
     overflow: 'hidden',
-    marginTop: 4,
+    shadowColor: '#0B5757',
+    shadowOpacity: 0.1,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 4,
   },
-  timeItem: {
-    height: ITEM_HEIGHT,
+  cardScroll: {
+    padding: 26,
+    paddingBottom: 190,
+  },
+  cardBody: {
+    flex: 1,
+    zIndex: 1,
+  },
+  grass: {
+    width: '100%',
+    height: '100%',
+  },
+  grassScene: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 190,
+    width: '100%',
+    zIndex: 0,
+  },
+  cardTitle: {
+    fontSize: 26,
+    lineHeight: 32,
+    fontWeight: '800',
+    color: TEAL_DARK,
+    marginBottom: 24,
+  },
+  heartIcon: {
+    fontSize: 22,
+  },
+  fieldLabel: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: TEAL_DARK,
+    marginBottom: 10,
+  },
+  inputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: '#D6ECEC',
+    paddingHorizontal: 16,
+    height: 60,
+  },
+  inputIcon: {
+    fontSize: 20,
+    marginRight: 12,
+  },
+  input: {
+    flex: 1,
+    fontSize: 20,
+    color: '#21413F',
+    fontWeight: '600',
+  },
+  ageValue: {
+    flex: 1,
+    fontSize: 20,
+    color: '#21413F',
+    fontWeight: '700',
+  },
+  stepperGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: '#D6ECEC',
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  stepperButton: {
+    width: 46,
+    height: 40,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  timeText: {
-    color: '#64748B',
+  stepperDivider: {
+    width: 1,
+    height: 24,
+    backgroundColor: '#D6ECEC',
+  },
+  stepperText: {
+    fontSize: 24,
+    color: TEAL_DARK,
+    fontWeight: '600',
+  },
+  helperRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginTop: 26,
+    gap: 8,
+  },
+  heartIconSmall: {
     fontSize: 16,
   },
-  timeTextSelected: {
-    color: '#4A90D9',
-    fontSize: 18,
-    fontWeight: '800',
+  helperText: {
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#5C7A78',
+    fontWeight: '500',
   },
-  saveButton: {
-    marginTop: 20,
-    backgroundColor: '#4A90D9',
-    borderRadius: 14,
-    paddingVertical: 15,
+  optionsList: {
+    gap: 12,
+  },
+  option: {
+    flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: '#D6ECEC',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    gap: 14,
   },
-  saveButtonText: {
-    color: '#FFF',
-    fontSize: 17,
+  optionSelected: {
+    borderColor: TEAL,
+    backgroundColor: '#EAF7F6',
+  },
+  radio: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#C2DDDD',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  radioSelected: {
+    borderColor: TEAL,
+  },
+  radioInner: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: TEAL,
+  },
+  optionLabel: {
+    flex: 1,
+    fontSize: 16,
+    color: '#3C5654',
+    fontWeight: '600',
+  },
+  optionLabelSelected: {
+    color: TEAL_DARK,
+    fontWeight: '700',
+  },
+  continueButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: TEAL,
+    borderRadius: 30,
+    height: 60,
+    marginTop: 16,
+    gap: 12,
+    shadowColor: TEAL_DARK,
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
+  },
+  continueButtonDisabled: {
+    backgroundColor: '#A9D2CF',
+    shadowOpacity: 0,
+  },
+  continueText: {
+    color: '#FFFFFF',
+    fontSize: 19,
     fontWeight: '800',
+  },
+  continueArrow: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '800',
+  },
+  finalContent: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 32,
+    paddingBottom: 190,
+  },
+  finalEmoji: {
+    fontSize: 56,
+    marginBottom: 16,
+  },
+  finalTitle: {
+    fontSize: 30,
+    fontWeight: '800',
+    color: TEAL_DARK,
+    marginBottom: 16,
+  },
+  finalBody: {
+    fontSize: 18,
+    lineHeight: 26,
+    color: '#3C5654',
+    textAlign: 'center',
+    fontWeight: '500',
+  },
+  finalName: {
+    color: TEAL_DARK,
+    fontWeight: '800',
+  },
+  finalCta: {
+    marginTop: 20,
+    fontSize: 20,
+    fontWeight: '800',
+    color: TEAL,
   },
 });

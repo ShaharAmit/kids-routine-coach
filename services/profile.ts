@@ -74,6 +74,7 @@ export async function getChildProfile(): Promise<ChildProfile | null> {
       scheduledTime: fallbackTime,
       activityStack: normalizedStack,
       stepTimes: normalizeStepTimes((parsed as any).stepTimes, normalizedStack, fallbackTime),
+      answers: (parsed as any).answers ?? undefined,
     } as ChildProfile;
   } catch {
     return removeInvalidProfile('json-parse-failure');
