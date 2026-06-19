@@ -81,12 +81,16 @@ export default function StarsBackground({ children }: { children?: React.ReactNo
 
   const stars = useMemo<StarConfig[]>(
     () => [
-      { top: 90, size: 26, duration: 48000, delay: 0, opacity: 0.95, twinkleDuration: 1600 },
-      { top: 170, size: 16, duration: 60000, delay: 6000, opacity: 0.7, twinkleDuration: 2200 },
-      { top: 50, size: 20, duration: 54000, delay: 14000, opacity: 0.85, twinkleDuration: 1900 },
-      { top: 260, size: 12, duration: 68000, delay: 2000, opacity: 0.6, twinkleDuration: 2600 },
-      { top: 330, size: 22, duration: 58000, delay: 9000, opacity: 0.8, twinkleDuration: 2000 },
-      { top: 210, size: 14, duration: 64000, delay: 20000, opacity: 0.65, twinkleDuration: 2400 },
+      
+      { top: 30, size: 70, duration: 48000, delay: 0, opacity: 0.95, twinkleDuration: 1600 },
+      { top: 70, size: 60, duration: 48000, delay: 5000, opacity: 0.7, twinkleDuration: 2200 },
+      { top: 40, size: 65, duration: 48000, delay: 10000, opacity: 0.85, twinkleDuration: 1900 },
+      { top: 100, size: 60, duration: 48000, delay: 15000, opacity: 0.6, twinkleDuration: 2600 },
+      { top: 55, size: 65, duration: 48000, delay: 20000, opacity: 0.8, twinkleDuration: 2000 },
+      { top: 80, size: 70, duration: 48000, delay: 25000, opacity: 0.65, twinkleDuration: 2400 },
+      { top: 30, size: 70, duration: 48000, delay: 30000, opacity: 0.95, twinkleDuration: 2400 },
+      { top: 70, size: 65, duration: 48000, delay: 35000, opacity: 0.8, twinkleDuration: 1900 },
+      { top: 110, size: 60, duration: 48000, delay: 40000, opacity: 0.65, twinkleDuration: 2200 },
     ],
     []
   );
@@ -103,8 +107,8 @@ export default function StarsBackground({ children }: { children?: React.ReactNo
 
 const styles = StyleSheet.create({
   root: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#0E1630',
+    ...StyleSheet.absoluteFill,
+    backgroundColor: '#2e4385',
     overflow: 'hidden',
   },
   star: {

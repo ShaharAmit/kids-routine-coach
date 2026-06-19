@@ -29,21 +29,19 @@ import { ensureAuth } from '../services/firebase';
 import { getHomeBootstrapSnapshot, isRoutineWarmed, markRoutineWarmed } from '../services/homeBootstrap';
 import { ensureAudioForRoutine } from '../services/tts';
 import { Routine } from '../types';
+import { getCurrentSegment, MORNING_START_MINUTES, EVENING_START_MINUTES } from '../utils/timeOfDay';
 
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-const MORNING_START_MINUTES = 4 * 60;
-const EVENING_START_MINUTES = 15 * 60;
-
 const TASK_IMAGES: Record<string, ReturnType<typeof require>> = {
-  brush_teeth: require('../assets/images/3.png'),
-  get_dressed: require('../assets/images/4.png'),
-  put_on_pajamas: require('../assets/images/4.png'),
-  read_book: require('../assets/images/5.png'),
-  drink_water: require('../assets/images/6.png'),
+  brush_teeth: require('../assets/images/tooth_brush.png'),
+  bed_time: require('../assets/images/bed_time.png'),
+  put_on_pajamas: require('../assets/images/put_on_pajamas.png'),
+  read_book: require('../assets/images/read_book.png'),
+  drink_water: require('../assets/images/drink_water.png'),
 };
 
-const TASK_FALLBACK_IMAGE = require('../assets/images/7.png');
+const TASK_FALLBACK_IMAGE = require('../assets/images/sun.png');
 
 const TASK_SUBTITLES: Record<string, string> = {
   brush_teeth: "Let's make those teeth sparkle!",
@@ -54,14 +52,6 @@ const TASK_SUBTITLES: Record<string, string> = {
 };
 
 const TASK_FALLBACK_SUBTITLE = 'Close your eyes and rest';
-
-function getCurrentSegment(): 'morning' | 'evening' {
-  const now = new Date();
-  const minutes = now.getHours() * 60 + now.getMinutes();
-  return minutes >= MORNING_START_MINUTES && minutes < EVENING_START_MINUTES
-    ? 'morning'
-    : 'evening';
-}
 
 function timeToMinutes(value: string): number {
   const [hourStr, minuteStr] = value.split(':');
@@ -122,16 +112,11 @@ export default function HomeScreen() {
   const [viewMode, setViewMode] = useState<'tasks' | 'player'>('tasks');
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [assetsReady, setAssetsReady] = useState(false);
-  const [menuVisible, setMenuVisible] = useState(false);
-  const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [trophyVisible, setTrophyVisible] = useState(false);
   const [trophyShownThisSession, setTrophyShownThisSession] = useState<Record<'morning' | 'evening', boolean>>({
     morning: false,
     evening: false,
   });
-
-  const headerMenuButtonRef = useRef<any>(null);
-  const menuAnim = useRef(new Animated.Value(0)).current;
 
   const { routines, loading, error } = useUserRoutines(userId);
   const bootstrapSnapshot = useMemo(() => getHomeBootstrapSnapshot(userId), [userId]);
@@ -312,76 +297,6 @@ export default function HomeScreen() {
     setViewMode('tasks');
   }, [primaryRoutine, visibleStepIndexes, markStepDone, segment, currentStepIndex]);
 
-  const measureMenuAnchor = () => {
-    headerMenuButtonRef.current?.measureInWindow((x: number, y: number, width: number, height: number) => {
-      setMenuAnchor({ x, y, width, height });
-    });
-  };
-
-  const openMenu = () => {
-    measureMenuAnchor();
-    setMenuVisible(true);
-    menuAnim.setValue(0);
-    Animated.timing(menuAnim, {
-      toValue: 1,
-      duration: 170,
-      useNativeDriver: true,
-    }).start();
-  };
-
-  const closeMenu = () => {
-    Animated.timing(menuAnim, {
-      toValue: 0,
-      duration: 130,
-      useNativeDriver: true,
-    }).start(({ finished }) => {
-      if (finished) {
-        setMenuVisible(false);
-        setMenuAnchor(null);
-      }
-    });
-  };
-
-  const menuAnimatedStyle = {
-    opacity: menuAnim,
-    transform: [
-      {
-        translateY: menuAnim.interpolate({
-          inputRange: [0, 1],
-          outputRange: [-8, 0],
-        }),
-      },
-      {
-        scale: menuAnim.interpolate({
-          inputRange: [0, 1],
-          outputRange: [0.98, 1],
-        }),
-      },
-    ],
-  };
-
-  const menuHorizontalMargin = 12;
-  const menuVerticalGap = 6;
-  const menuWidth = Math.max(176, Math.min(224, windowWidth * 0.48));
-  const estimatedMenuHeight = 248;
-  const fallbackTop = topInset + 50;
-  const fallbackLeft = Math.max(windowWidth - menuWidth - menuHorizontalMargin, menuHorizontalMargin);
-
-  const menuPosition = menuAnchor
-    ? {
-        top: Math.min(
-          menuAnchor.y + menuAnchor.height + menuVerticalGap,
-          windowHeight - insets.bottom - estimatedMenuHeight - 12
-        ),
-        left: Math.min(
-          Math.max(menuAnchor.x + menuAnchor.width - menuWidth, menuHorizontalMargin),
-          windowWidth - menuWidth - menuHorizontalMargin
-        ),
-      }
-    : {
-        top: fallbackTop,
-        left: fallbackLeft,
-      };
 
   if ((loading || completionLoading) && !primaryRoutine) {
     return (
@@ -413,8 +328,6 @@ export default function HomeScreen() {
   }
 
   const isEvening = segment === 'evening';
-  const title = isEvening ? 'EVENING' : 'MORNING';
-  const subtitle = isEvening ? 'Time to wind down' : "Let's start the day!";
   const completedCount = visibleStepIndexes.filter((index) => completedIndexes.has(index)).length;
 
   const currentActivityStep = primaryRoutine.activityStack[currentStepIndex] ?? [];
@@ -424,20 +337,10 @@ export default function HomeScreen() {
     <View style={[styles.container, isEvening ? styles.containerEvening : styles.containerMorning]}>
       <Stack.Screen
         options={{
-          headerStyle: { backgroundColor: isEvening ? '#0E1630' : '#c6e8e8' },
+          headerStyle: { backgroundColor: isEvening ? '#2e4385' : '#c6e8e8' },
           headerTintColor: isEvening ? '#FFF' : '#1E7B7B',
           headerTitleStyle: { fontFamily: roundedFontBold ?? 'System', fontSize: 17, color: isEvening ? '#FFF' : '#1E7B7B' },
           headerShadowVisible: false,
-          headerRight: () => (
-            <TouchableOpacity
-              ref={headerMenuButtonRef}
-              style={styles.headerMenuButton}
-              onPress={() => (menuVisible ? closeMenu() : openMenu())}
-              activeOpacity={0.85}
-            >
-              <Text style={[styles.headerMenuIcon, !isEvening && styles.headerMenuIconMorning]}>≡</Text>
-            </TouchableOpacity>
-          ),
         }}
       />
 
@@ -448,22 +351,18 @@ export default function HomeScreen() {
           {isEvening ? (
             <>
               <StarsBackground />
-              <Image source={require('../assets/images/moon.png')} style={styles.moon} resizeMode="contain" />
             </>
           ) : (
             <>
               <CloudsBackground />
-              <Image source={require('../assets/images/sun.png')} style={styles.sun} resizeMode="contain" />
             </>
           )}
 
           <SafeAreaView style={styles.safeContent} edges={['bottom']}>
-            <View style={styles.tasksHeader}>
-              <Text style={[styles.tasksTitle, !isEvening && styles.tasksTitleMorning]}>{title}</Text>
-              <Text style={[styles.tasksSubtitle, !isEvening && styles.tasksSubtitleMorning]}>{subtitle}</Text>
-              <Text style={[styles.tasksProgress, !isEvening && styles.tasksProgressMorning]}>
-                {completedCount} / {visibleStepIndexes.length}
-              </Text>
+           <View style={styles.tasksHeader}>
+             <Text style={[styles.tasksProgress, !isEvening && styles.tasksProgressMorning]}>
+               {completedCount} / {visibleStepIndexes.length}
+             </Text>
               {cacheStage === 'warming-assets' ? (
                 <View style={styles.prepBadge}>
                   <Text style={styles.prepBadgeText}>Preparing media...</Text>
@@ -564,43 +463,41 @@ export default function HomeScreen() {
         </View>
       ) : null}
 
-      <Modal visible={menuVisible} transparent animationType="none" onRequestClose={closeMenu}>
-        <Pressable style={styles.menuOverlay} onPress={closeMenu}>
-          <Animated.View style={[styles.menuPopover, menuPosition, { width: menuWidth }, menuAnimatedStyle]}>
-            <Text style={styles.menuTitle}>Menu</Text>
+      {/* Floating Bottom Menu Bar */}
+      <View style={[styles.floatingMenu, { marginBottom: insets.bottom + 16 }]}>
+        <TouchableOpacity
+          style={styles.menuItemContainer}
+          onPress={() => router.push('/settings' as never)}
+          activeOpacity={0.7}
+        >
+          <View style={styles.menuIconButton}>
+            <Text style={styles.menuIcon}>⚙️</Text>
+          </View>
+          <Text style={styles.menuLabel}>Settings</Text>
+        </TouchableOpacity>
 
-            <TouchableOpacity
-              style={styles.menuItem}
-              onPress={() => {
-                closeMenu();
-                router.push('/settings' as never);
-              }}
-            >
-              <Text style={styles.menuItemText}>Settings</Text>
-            </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.menuItemContainer}
+          onPress={() => router.push('/onboarding/questionnaire' as never)}
+          activeOpacity={0.7}
+        >
+          <View style={styles.menuIconButton}>
+            <Text style={styles.menuIcon}>✏️</Text>
+          </View>
+          <Text style={styles.menuLabel}>Questionnaire</Text>
+        </TouchableOpacity>
 
-            <TouchableOpacity
-              style={styles.menuItem}
-              onPress={() => {
-                closeMenu();
-                router.push('/onboarding/questionnaire' as never);
-              }}
-            >
-              <Text style={styles.menuItemText}>Questionnaire</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.menuItem}
-              onPress={() => {
-                closeMenu();
-                router.push('/parent/create' as never);
-              }}
-            >
-              <Text style={styles.menuItemText}>Add Routine</Text>
-            </TouchableOpacity>
-          </Animated.View>
-        </Pressable>
-      </Modal>
+        <TouchableOpacity
+          style={styles.menuItemContainer}
+          onPress={() => router.push('/parent/create' as never)}
+          activeOpacity={0.7}
+        >
+          <View style={styles.menuIconButton}>
+            <Text style={styles.menuIcon}>➕</Text>
+          </View>
+          <Text style={styles.menuLabel}>Add Task</Text>
+        </TouchableOpacity>
+      </View>
 
       <Modal visible={trophyVisible} transparent animationType="fade" onRequestClose={() => setTrophyVisible(false)}>
         <View style={styles.trophyOverlay}>
@@ -633,7 +530,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#c6e8e8',
   },
   containerEvening: {
-    backgroundColor: '#0E1630',
+    backgroundColor: '#2e4385',
   },
   centered: {
     flex: 1,
@@ -666,22 +563,24 @@ const styles = StyleSheet.create({
   },
   moon: {
     position: 'absolute',
-    top: 8,
+    top: -30,
     right: 14,
     width: 96,
     height: 96,
+    zIndex: 7!,
   },
   sun: {
     position: 'absolute',
-    top: 6,
+    top: -30,
     right: 12,
     width: 104,
     height: 104,
+    zIndex: 7!,
   },
   tasksHeader: {
     alignItems: 'center',
-    paddingTop: 22,
-    paddingBottom: 12,
+    paddingTop: 12,
+    paddingBottom: 6,
     paddingHorizontal: 16,
   },
   tasksTitle: {
@@ -729,9 +628,11 @@ const styles = StyleSheet.create({
   },
   cardWrap: {
     flex: 1,
+    maxHeight: '65%',
+    marginVertical: 'auto',
     paddingHorizontal: 18,
-    paddingTop: 6,
-    paddingBottom: 12,
+    paddingTop: 2,
+    paddingBottom: 6,
   },
   card: {
     flex: 1,
@@ -749,8 +650,8 @@ const styles = StyleSheet.create({
   },
   tasksList: {
     paddingHorizontal: 14,
-    paddingTop: 14,
-    paddingBottom: 24,
+    paddingTop: 8,
+    paddingBottom: 16,
   },
   taskCard: {
     backgroundColor: '#FFFFFF',
@@ -945,5 +846,44 @@ const styles = StyleSheet.create({
   },
   headerMenuIconMorning: {
     color: '#1E7B7B',
+  },
+  floatingMenu: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'flex-end',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginHorizontal: 12,
+    shadowColor: '#0B2040',
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: -4 },
+    elevation: 8,
+  },
+  menuItemContainer: {
+    alignItems: 'center',
+    gap: 3,
+  },
+  menuIconButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  menuIcon: {
+    fontSize: 14,
+  },
+  menuLabel: {
+    fontSize: 9,
+    fontWeight: '600',
+    color: '#536362',
+    textAlign: 'center',
   },
 });

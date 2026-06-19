@@ -1,12 +1,47 @@
-import React, { useEffect, useCallback } from 'react';
-import { AppState } from 'react-native';
+import React, { useEffect, useCallback, useState } from 'react';
+import { AppState, Text, View, Image } from 'react-native';
 import { Stack, router, usePathname } from 'expo-router';
 import * as Notifications from 'expo-notifications';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { clearDebugHomeAccess, hasDebugHomeAccess } from '../services/debugFlow';
+import { getCurrentSegment, segmentToTitle, segmentToSubtitle, type DaySegment } from '../utils/timeOfDay';
+
+function HeaderTitle({ segment }: { segment: DaySegment }) {
+  return (
+    <View>
+      <Text style={{ fontWeight: '700', fontSize: 18, color: '#FFF' }}>
+        {segmentToTitle(segment)}
+      </Text>
+      <Text style={{ fontSize: 12, color: '#E8F0F7', marginTop: 2, textAlign: 'center' }}>
+        {segmentToSubtitle(segment)}
+      </Text>
+    </View>
+  );
+}
 
 export default function RootLayout() {
   const pathname = usePathname();
+  const [segment, setSegment] = useState<DaySegment>(getCurrentSegment);
+  const [showDecorations, setShowDecorations] = useState(false);
+
+  // Re-evaluate segment when app returns to foreground
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') setSegment(getCurrentSegment());
+    });
+    return () => sub.remove();
+  }, []);
+
+  // Show moon/sun with 1 second delay when entering home screen
+  useEffect(() => {
+    if (pathname === '/') {
+      setShowDecorations(false);
+      const timer = setTimeout(() => setShowDecorations(true), 1000);
+      return () => clearTimeout(timer);
+    } else {
+      setShowDecorations(false);
+    }
+  }, [pathname]);
 
   // Handle notification tap when app is open or in background
   const handleNotificationResponse = useCallback(
@@ -66,6 +101,25 @@ export default function RootLayout() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
+      {/* Moon/Sun decoration - positioned between header and content - only on home screen */}
+      {pathname === '/' && showDecorations && (
+        <View style={{ position: 'absolute', right: 16, top: 80, zIndex: 50, pointerEvents: 'none' }}>
+          {segment === 'evening' ? (
+            <Image
+              source={require('../assets/images/moon.png')}
+              style={{ width: 90, height: 90 }}
+              resizeMode="contain"
+            />
+          ) : (
+            <Image
+              source={require('../assets/images/sun.png')}
+              style={{ width: 90, height: 90 }}
+              resizeMode="contain"
+            />
+          )}
+        </View>
+      )}
+
       <Stack
         initialRouteName="loading"
         screenOptions={{
@@ -76,7 +130,7 @@ export default function RootLayout() {
       >
         <Stack.Screen name="loading" options={{ title: 'Loading', headerShown: false }} />
         <Stack.Screen name="onboarding" options={{ headerShown: false }} />
-        <Stack.Screen name="index" options={{ title: 'Kids Routine Coach' }} />
+        <Stack.Screen name="index" options={{ headerTitle: () => <HeaderTitle segment={segment} /> }} />
         <Stack.Screen name="settings" options={{ title: 'Settings' }} />
         <Stack.Screen name="parent/create" options={{ title: 'Create Routine' }} />
       </Stack>

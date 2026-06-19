@@ -59,9 +59,11 @@ export default function CloudsBackground({ children }: { children?: React.ReactN
   const clouds = useMemo<CloudConfig[]>(
     () => [
       { top: 70, size: 150, duration: 34000, delay: 0, opacity: 0.95 },
-      { top: 150, size: 95, duration: 46000, delay: 6000, opacity: 0.8 },
-      { top: 30, size: 110, duration: 40000, delay: 14000, opacity: 0.7 },
-      { top: 220, size: 70, duration: 52000, delay: 2000, opacity: 0.6 },
+      { top: 50, size: 80, duration: 30000, delay: 3000, opacity: 0.6 },
+      { top: 120, size: 95, duration: 46000, delay: 6000, opacity: 0.8 },
+      { top: 50, size: 80, duration: 24000, delay: 9000, opacity: 0.6 },
+      { top: 30, size: 110, duration: 40000, delay: 12000, opacity: 0.7 },
+      { top: 100, size: 70, duration: 52000, delay: 15000, opacity: 0.6 },
     ],
     []
   );
@@ -78,7 +80,7 @@ export default function CloudsBackground({ children }: { children?: React.ReactN
 
 const styles = StyleSheet.create({
   root: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: '#c6e8e8',
     overflow: 'hidden',
   },
