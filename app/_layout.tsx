@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback, useState } from 'react';
+import React, { useEffect, useCallback, useState, useRef } from 'react';
 import { AppState, Text, View, Image } from 'react-native';
 import { Stack, router, usePathname } from 'expo-router';
 import * as Notifications from 'expo-notifications';
@@ -21,6 +21,7 @@ function HeaderTitle({ segment }: { segment: DaySegment }) {
 
 export default function RootLayout() {
   const pathname = usePathname();
+  const prevPathnameRef = useRef<string>('/');
   const [segment, setSegment] = useState<DaySegment>(getCurrentSegment);
   const [showDecorations, setShowDecorations] = useState(false);
 
@@ -34,12 +35,23 @@ export default function RootLayout() {
 
   // Show moon/sun with 1 second delay when entering home screen
   useEffect(() => {
-    if (pathname === '/') {
+    const wasNotHome = prevPathnameRef.current !== '/';
+    const isNowHome = pathname === '/';
+    
+    if (isNowHome && wasNotHome) {
+      // Just entered home screen - start delay
       setShowDecorations(false);
       const timer = setTimeout(() => setShowDecorations(true), 1000);
+      prevPathnameRef.current = pathname;
       return () => clearTimeout(timer);
+    } else if (isNowHome && !wasNotHome) {
+      // Already on home screen, do nothing
+      prevPathnameRef.current = pathname;
+      return;
     } else {
+      // Left home screen
       setShowDecorations(false);
+      prevPathnameRef.current = pathname;
     }
   }, [pathname]);
 
