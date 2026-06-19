@@ -1,8 +1,9 @@
 import React, { useEffect, useCallback, useState, useRef } from 'react';
-import { AppState, Text, View, Image } from 'react-native';
-import { Stack, router, usePathname } from 'expo-router';
+import { AppState, Text, View, Image, useWindowDimensions } from 'react-native';
+import { Tabs, Stack, router, usePathname } from 'expo-router';
 import * as Notifications from 'expo-notifications';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { clearDebugHomeAccess, hasDebugHomeAccess } from '../services/debugFlow';
 import { getCurrentSegment, segmentToTitle, segmentToSubtitle, type DaySegment } from '../utils/timeOfDay';
 
@@ -19,11 +20,32 @@ function HeaderTitle({ segment }: { segment: DaySegment }) {
   );
 }
 
+function TabLabel({ text, color }: { text: string; color: string }) {
+  return (
+    <Text
+      numberOfLines={1}
+      adjustsFontSizeToFit
+      minimumFontScale={0.8}
+      style={{
+        color,
+        fontSize: 12,
+        fontWeight: '700',
+        textAlign: 'center',
+        width: '100%',
+      }}
+    >
+      {text}
+    </Text>
+  );
+}
+
 export default function RootLayout() {
+  const { width: screenWidth } = useWindowDimensions();
   const pathname = usePathname();
   const prevPathnameRef = useRef<string | null>(null);
   const [segment, setSegment] = useState<DaySegment>(getCurrentSegment);
   const [showDecorations, setShowDecorations] = useState(false);
+  const tabBarHorizontalInset = Math.round(screenWidth * 0.05);
 
   // Re-evaluate segment when app returns to foreground
   useEffect(() => {
@@ -33,22 +55,19 @@ export default function RootLayout() {
     return () => sub.remove();
   }, []);
 
-  // Show moon/sun with 1 second delay when entering home screen
+  // Show moon/sun with 1 second delay when entering routines tab
   useEffect(() => {
     const wasNotHome = prevPathnameRef.current !== null && prevPathnameRef.current !== '/';
     const isNowHome = pathname === '/';
     
     if (isNowHome && (wasNotHome || prevPathnameRef.current === null)) {
-      // Just entered home screen OR app is starting on home screen - start delay
       setShowDecorations(false);
-      const timer = setTimeout(() => setShowDecorations(true), 1000);
+      const timer = setTimeout(() => setShowDecorations(true), 200);
       prevPathnameRef.current = pathname;
       return () => clearTimeout(timer);
     } else if (isNowHome && prevPathnameRef.current === '/') {
-      // Already on home screen, do nothing
       return;
     } else {
-      // Left home screen
       setShowDecorations(false);
       prevPathnameRef.current = pathname;
     }
@@ -63,8 +82,7 @@ export default function RootLayout() {
       };
 
       if (data?.routineId) {
-        // Deep-link to the unified daily dashboard
-        router.push('/');
+        router.push('/' as never);
       }
     },
     []
@@ -92,12 +110,10 @@ export default function RootLayout() {
       }
     });
 
-    // Listener for taps while app is running
     const responseListener = Notifications.addNotificationResponseReceivedListener(
       handleNotificationResponse
     );
 
-    // Handle the notification that launched the app from a closed state
     Notifications.getLastNotificationResponseAsync().then((response) => {
       if (response) {
         handleNotificationResponse(response);
@@ -112,7 +128,7 @@ export default function RootLayout() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      {/* Moon/Sun decoration - positioned between header and content - only on home screen */}
+      {/* Moon/Sun decoration - positioned between header and content - only on routines tab */}
       {pathname === '/' && showDecorations && (
         <View style={{ position: 'absolute', right: 16, top: 80, zIndex: 50, pointerEvents: 'none' }}>
           {segment === 'evening' ? (
@@ -131,20 +147,88 @@ export default function RootLayout() {
         </View>
       )}
 
-      <Stack
-        initialRouteName="loading"
-        screenOptions={{
-          headerStyle: { backgroundColor: '#4A90D9' },
-          headerTintColor: '#FFF',
-          headerTitleStyle: { fontWeight: '700', fontSize: 18 },
-        }}
-      >
-        <Stack.Screen name="loading" options={{ title: 'Loading', headerShown: false }} />
-        <Stack.Screen name="onboarding" options={{ headerShown: false }} />
-        <Stack.Screen name="index" options={{ headerTitle: () => <HeaderTitle segment={segment} /> }} />
-        <Stack.Screen name="settings" options={{ title: 'Settings' }} />
-        <Stack.Screen name="parent/create" options={{ title: 'Create Routine' }} />
-      </Stack>
+      {pathname === '/loading' || pathname.startsWith('/onboarding') ? (
+        <Stack
+          initialRouteName="loading"
+          screenOptions={{
+            headerStyle: { backgroundColor: '#4A90D9' },
+            headerTintColor: '#FFF',
+            headerTitleStyle: { fontWeight: '700', fontSize: 18 },
+          }}
+        >
+          <Stack.Screen name="loading" options={{ title: 'Loading', headerShown: false }} />
+          <Stack.Screen name="onboarding" options={{ headerShown: false }} />
+        </Stack>
+      ) : (
+        <Tabs
+          screenOptions={{
+            headerStyle: { backgroundColor: '#4A90D9' },
+            headerTintColor: '#FFF',
+            headerTitleStyle: { fontWeight: '700', fontSize: 18 },
+            tabBarStyle: {
+              position: 'absolute',
+              marginHorizontal: tabBarHorizontalInset,
+              bottom: 34,
+              height: 66,
+              borderRadius: 20,
+              backgroundColor: '#FFFFFF',
+              borderTopWidth: 0,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 6 },
+              shadowOpacity: 0.12,
+              shadowRadius: 10,
+              elevation: 10,
+            },
+            tabBarShowLabel: true,
+            tabBarLabelPosition: 'below-icon',
+            tabBarItemStyle: { flex: 1, paddingVertical: 6, justifyContent: 'center' },
+            tabBarLabelStyle: {
+              fontSize: 12,
+              fontWeight: '700',
+              textAlign: 'center',
+            },
+            tabBarIconStyle: { marginBottom: 2 },
+            tabBarActiveTintColor: '#4A90D9',
+            tabBarInactiveTintColor: '#CBD5E1',
+          }}
+        >
+          <Tabs.Screen
+            name="index"
+            options={{
+              headerTitle: () => <HeaderTitle segment={segment} />,
+              title: 'Routines',
+              tabBarLabel: ({ color }) => <TabLabel text="Routines" color={color} />,
+              tabBarIcon: ({ color, size }) => (
+                <MaterialCommunityIcons name="checkbox-marked-circle-outline" size={size} color={color} />
+              ),
+            }}
+          />
+          <Tabs.Screen
+            name="rewards"
+            options={{
+              title: 'Rewards',
+            tabBarLabel: ({ color }) => <TabLabel text="Rewards" color={color} />,
+              tabBarIcon: ({ color, size }) => (
+                <MaterialCommunityIcons name="star" size={size} color={color} />
+              ),
+            }}
+          />
+          <Tabs.Screen
+            name="settings"
+            options={{
+              title: 'Settings',
+            tabBarLabel: ({ color }) => <TabLabel text="Settings" color={color} />,
+              tabBarIcon: ({ color, size }) => (
+                <MaterialCommunityIcons name="cog" size={size} color={color} />
+              ),
+            }}
+          />
+          <Tabs.Screen name="loading" options={{ href: null }} />
+          <Tabs.Screen name="onboarding" options={{ href: null }} />
+          <Tabs.Screen name="parent/create" options={{ href: null }} />
+          <Tabs.Screen name="routine/[id]" options={{ href: null }} />
+        </Tabs>
+      )}
     </GestureHandlerRootView>
   );
 }

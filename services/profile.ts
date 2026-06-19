@@ -27,6 +27,7 @@ export async function saveChildProfile(profile: ChildProfile): Promise<void> {
     ...profile,
     activityStack: normalizedStack,
     stepTimes: normalizeStepTimes(profile.stepTimes, normalizedStack, profile.scheduledTime),
+    totalStarsEarned: profile.totalStarsEarned ?? 0,
   };
   await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(normalized));
 }
@@ -75,6 +76,7 @@ export async function getChildProfile(): Promise<ChildProfile | null> {
       activityStack: normalizedStack,
       stepTimes: normalizeStepTimes((parsed as any).stepTimes, normalizedStack, fallbackTime),
       answers: (parsed as any).answers ?? undefined,
+      totalStarsEarned: typeof parsed.totalStarsEarned === 'number' ? parsed.totalStarsEarned : 0,
     } as ChildProfile;
   } catch {
     return removeInvalidProfile('json-parse-failure');

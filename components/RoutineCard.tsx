@@ -1,6 +1,5 @@
 import React from 'react';
 import { StyleSheet, View, Text, TouchableOpacity } from 'react-native';
-import { router } from 'expo-router';
 import { Routine } from '../types';
 import { ACTIVITIES } from '../constants/activities';
 
@@ -23,7 +22,10 @@ export default function RoutineCard({ routine }: RoutineCardProps) {
   return (
     <TouchableOpacity
       style={styles.card}
-      onPress={() => router.push(`/routine/${routine.id}`)}
+      onPress={() => {
+        // RoutineCard navigation - currently unused in tab structure
+        // The routine player is built into app/index.tsx
+      }}
       activeOpacity={0.8}
     >
       <View style={styles.header}>

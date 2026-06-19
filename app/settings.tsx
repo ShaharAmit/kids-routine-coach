@@ -171,6 +171,10 @@ export default function SettingsScreen() {
         <Text style={styles.primaryBtnText}>Edit Questionnaire</Text>
       </TouchableOpacity>
 
+      <TouchableOpacity style={styles.primaryBtn} onPress={() => router.push('/parent/create' as never)}>
+        <Text style={styles.primaryBtnText}>Add Task</Text>
+      </TouchableOpacity>
+
       <TouchableOpacity
         style={[styles.secondaryBtn, isRefreshing && { opacity: 0.7 }]}
         disabled={isRefreshing}
@@ -200,7 +204,7 @@ const styles = StyleSheet.create({
   },
   content: {
     padding: 18,
-    paddingBottom: 40,
+    paddingBottom: 130,
   },
   title: {
     fontSize: 28,

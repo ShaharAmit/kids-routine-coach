@@ -12,6 +12,21 @@ export function getCurrentSegment(): DaySegment {
     : 'evening';
 }
 
+export function timeToMinutes(value: string): number {
+  const [hourStr, minuteStr] = value.split(':');
+  const hour = Number(hourStr);
+  const minute = Number(minuteStr);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
+    return 8 * 60;
+  }
+  return hour * 60 + minute;
+}
+
+export function isMorningTime(value: string): boolean {
+  const minutes = timeToMinutes(value);
+  return minutes >= MORNING_START_MINUTES && minutes < EVENING_START_MINUTES;
+}
+
 export function segmentToTitle(segment: DaySegment): string {
   return segment === 'morning' ? '🌅 Good Morning' : '🌙 Good Evening';
 }

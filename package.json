@@ -11,6 +11,7 @@
     "lint": "expo lint"
   },
   "dependencies": {
+    "@expo/vector-icons": "^15.1.1",
     "@react-native-async-storage/async-storage": "^3.0.3",
     "expo": "~55.0.26",
     "expo-asset": "~55.0.17",
@@ -36,6 +37,8 @@
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
+    "eslint": "^9.0.0",
+    "eslint-config-expo": "~55.0.1",
     "typescript": "~5.9.2"
   },
   "private": true

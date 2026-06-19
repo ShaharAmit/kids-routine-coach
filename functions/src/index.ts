@@ -46,6 +46,20 @@ interface SubmitEarlyAccessLeadResponse {
   status: 'created' | 'exists';
 }
 
+interface AwardRoutineStepStarRequest {
+  userId: string;
+  routineId: string;
+  date: string;
+  segment: 'morning' | 'evening';
+  stepIndex: number;
+  stars?: number;
+}
+
+interface AwardRoutineStepStarResponse {
+  totalStars: number;
+  awarded: boolean;
+}
+
 function pcm16ToWav(pcmData: Buffer, sampleRate = 24000, channels = 1, bitsPerSample = 16): Buffer {
   const byteRate = (sampleRate * channels * bitsPerSample) / 8;
   const blockAlign = (channels * bitsPerSample) / 8;
@@ -307,6 +321,81 @@ export const submitEarlyAccessLead = onCall(
     });
 
     return { status: result };
+  }
+);
+
+export const awardRoutineStepStar = onCall(
+  { timeoutSeconds: 30, memory: '256MiB' },
+  async (
+    request: CallableRequest<AwardRoutineStepStarRequest>
+  ): Promise<AwardRoutineStepStarResponse> => {
+    const authUid = request.auth?.uid;
+    if (!authUid) {
+      throw new HttpsError('unauthenticated', 'Authentication is required.');
+    }
+
+    const { userId, routineId, date, segment, stepIndex, stars = 1 } = request.data ?? {};
+    if (!userId || !routineId || !date || (segment !== 'morning' && segment !== 'evening')) {
+      throw new HttpsError(
+        'invalid-argument',
+        'Missing required fields: userId, routineId, date, segment.'
+      );
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      throw new HttpsError('invalid-argument', 'date must be in YYYY-MM-DD format.');
+    }
+    if (!Number.isInteger(stepIndex) || stepIndex < 0) {
+      throw new HttpsError('invalid-argument', 'stepIndex must be a non-negative integer.');
+    }
+    if (!Number.isInteger(stars) || stars <= 0 || stars > 10) {
+      throw new HttpsError('invalid-argument', 'stars must be an integer between 1 and 10.');
+    }
+    if (authUid !== userId) {
+      throw new HttpsError('permission-denied', 'Cannot award stars for a different user.');
+    }
+
+    const statsRef = db.collection('user_stats').doc(userId);
+    const eventId = `${date}_${routineId}_${segment}_${stepIndex}`;
+    const awardRef = statsRef.collection('awards').doc(eventId);
+
+    return db.runTransaction(async (tx) => {
+      const [statsSnap, awardSnap] = await Promise.all([tx.get(statsRef), tx.get(awardRef)]);
+      const currentTotal = Number(statsSnap.data()?.totalStars ?? 0);
+
+      if (awardSnap.exists) {
+        return {
+          totalStars: currentTotal,
+          awarded: false,
+        };
+      }
+
+      const nextTotal = currentTotal + stars;
+
+      tx.set(
+        statsRef,
+        {
+          userId,
+          totalStars: nextTotal,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      tx.set(awardRef, {
+        userId,
+        routineId,
+        date,
+        segment,
+        stepIndex,
+        stars,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      return {
+        totalStars: nextTotal,
+        awarded: true,
+      };
+    });
   }
 );
 

@@ -1,22 +1,19 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  Animated,
   AppState,
   Image,
   Modal,
   Platform,
-  Pressable,
   ScrollView,
   StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
-  useWindowDimensions,
 } from 'react-native';
 import { router, Stack } from 'expo-router';
-import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import ActivityPlayer from '../components/ActivityPlayer';
 import StarsBackground from '../components/StarsBackground';
 import CloudsBackground from '../components/CloudsBackground';
@@ -27,11 +24,20 @@ import { subscribeAssetCacheStatus } from '../services/assetCacheService';
 import { areAssetsReady, syncRoutineAssets } from '../services/assetSync';
 import { ensureAuth } from '../services/firebase';
 import { getHomeBootstrapSnapshot, isRoutineWarmed, markRoutineWarmed } from '../services/homeBootstrap';
+import { getChildProfile, saveChildProfile } from '../services/profile';
+import { awardRoutineStepStar } from '../services/stars';
 import { ensureAudioForRoutine } from '../services/tts';
 import { Routine } from '../types';
 import { getCurrentSegment, MORNING_START_MINUTES, EVENING_START_MINUTES } from '../utils/timeOfDay';
 
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const getTodayISO = () => {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
 
 const TASK_IMAGES: Record<string, ReturnType<typeof require>> = {
   brush_teeth: require('../assets/images/tooth_brush.png'),
@@ -102,10 +108,6 @@ const roundedFontBold = Platform.select({
 });
 
 export default function HomeScreen() {
-  const insets = useSafeAreaInsets();
-  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
-  const topInset = insets.top + (Platform.OS === 'android' ? 8 : 0);
-
   const [userId, setUserId] = useState('');
   const [cacheStage, setCacheStage] = useState('idle');
   const [segment, setSegment] = useState<'morning' | 'evening'>(getCurrentSegment());
@@ -294,8 +296,31 @@ export default function HomeScreen() {
     if (!primaryRoutine || visibleStepIndexes.length === 0) return;
 
     await markStepDone(segment, currentStepIndex, visibleStepIndexes.length);
+    if (userId) {
+      try {
+        const award = await awardRoutineStepStar({
+          userId,
+          routineId: primaryRoutine.id,
+          date: getTodayISO(),
+          segment,
+          stepIndex: currentStepIndex,
+        });
+        if (award.awarded) {
+          const profile = await getChildProfile();
+          if (profile && profile.userId === userId) {
+            await saveChildProfile({
+              ...profile,
+              totalStarsEarned: award.totalStars,
+              updatedAt: Date.now(),
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('[Home] Failed to award star:', err);
+      }
+    }
     setViewMode('tasks');
-  }, [primaryRoutine, visibleStepIndexes, markStepDone, segment, currentStepIndex]);
+  }, [primaryRoutine, visibleStepIndexes, markStepDone, segment, currentStepIndex, userId]);
 
 
   if ((loading || completionLoading) && !primaryRoutine) {
@@ -463,42 +488,6 @@ export default function HomeScreen() {
         </View>
       ) : null}
 
-      {/* Floating Bottom Menu Bar */}
-      <View style={[styles.floatingMenu, { marginBottom: insets.bottom + 16 }]}>
-        <TouchableOpacity
-          style={styles.menuItemContainer}
-          onPress={() => router.push('/settings' as never)}
-          activeOpacity={0.7}
-        >
-          <View style={styles.menuIconButton}>
-            <Text style={styles.menuIcon}>⚙️</Text>
-          </View>
-          <Text style={styles.menuLabel}>Settings</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.menuItemContainer}
-          onPress={() => router.push('/onboarding/questionnaire' as never)}
-          activeOpacity={0.7}
-        >
-          <View style={styles.menuIconButton}>
-            <Text style={styles.menuIcon}>✏️</Text>
-          </View>
-          <Text style={styles.menuLabel}>Questionnaire</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.menuItemContainer}
-          onPress={() => router.push('/parent/create' as never)}
-          activeOpacity={0.7}
-        >
-          <View style={styles.menuIconButton}>
-            <Text style={styles.menuIcon}>➕</Text>
-          </View>
-          <Text style={styles.menuLabel}>Add Task</Text>
-        </TouchableOpacity>
-      </View>
-
       <Modal visible={trophyVisible} transparent animationType="fade" onRequestClose={() => setTrophyVisible(false)}>
         <View style={styles.trophyOverlay}>
           <View style={styles.trophyCard}>
@@ -651,7 +640,7 @@ const styles = StyleSheet.create({
   tasksList: {
     paddingHorizontal: 14,
     paddingTop: 8,
-    paddingBottom: 16,
+    paddingBottom: 96,
   },
   taskCard: {
     backgroundColor: '#FFFFFF',

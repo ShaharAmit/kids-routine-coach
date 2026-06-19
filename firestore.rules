@@ -28,5 +28,16 @@ service cloud.firestore {
     match /daily_trophies/{docId} {
       allow read, write: if true; // Lock to auth.uid before prod
     }
+
+    // User stats (stars) — readable by client, written by Cloud Functions/admin SDK.
+    match /user_stats/{userId} {
+      allow read: if true;
+      allow write: if false;
+
+      match /awards/{awardId} {
+        allow read: if true;
+        allow write: if false;
+      }
+    }
   }
 }

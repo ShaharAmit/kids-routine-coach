@@ -49,6 +49,40 @@ export interface QuestionnaireAnswers {
   morningSpeed?: MorningSpeed;
 }
 
+// Star level system
+export type StarLevel = 'Beginner' | 'Explorer' | 'Champion' | 'Superstar';
+
+export interface StarLevelConfig {
+  level: StarLevel;
+  emoji: string;
+  minStars: number;
+  maxStars: number;
+}
+
+export const STAR_LEVELS: StarLevelConfig[] = [
+  { level: 'Beginner', emoji: '🌱', minStars: 0, maxStars: 9 },
+  { level: 'Explorer', emoji: '🚀', minStars: 10, maxStars: 24 },
+  { level: 'Champion', emoji: '🏆', minStars: 25, maxStars: 49 },
+  { level: 'Superstar', emoji: '👑', minStars: 50, maxStars: Infinity },
+];
+
+export function getStarLevel(stars: number): StarLevelConfig {
+  return STAR_LEVELS.find((l) => stars >= l.minStars && stars <= l.maxStars) ?? STAR_LEVELS[0];
+}
+
+export function getStarsToNextLevel(currentStars: number): number {
+  const currentLevel = getStarLevel(currentStars);
+  if (currentLevel.level === 'Superstar') return 0;
+  return currentLevel.maxStars + 1 - currentStars;
+}
+
+export interface DailyProgress {
+  morningCompleted: number;
+  morningTotal: number;
+  eveningCompleted: number;
+  eveningTotal: number;
+}
+
 export interface Routine {
   id: string;
   userId: string;
@@ -75,6 +109,7 @@ export interface ChildProfile {
   activityStack: ActivityStep[];
   stepTimes?: string[];
   answers?: QuestionnaireAnswers;
+  totalStarsEarned: number;
   updatedAt: number;
 }
 

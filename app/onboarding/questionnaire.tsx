@@ -186,6 +186,7 @@ export default function QuestionnaireScreen() {
         activityStack,
         stepTimes: [...DEFAULT_STEP_TIMES],
         answers,
+        totalStarsEarned: 0,
         updatedAt: Date.now(),
       };
 
@@ -362,10 +363,10 @@ function NameAgeStep({
     <View>
       <Text style={styles.cardTitle}>
         <Text style={styles.heartIcon}>💙 </Text>
-        Hi! Let's get to know your child
+        Hi! Let&apos;s get to know your child
       </Text>
 
-      <Text style={styles.fieldLabel}>What's their name?</Text>
+      <Text style={styles.fieldLabel}>What&apos;s their name?</Text>
       <View style={styles.inputRow}>
         <Text style={styles.inputIcon}>👤</Text>
         <TextInput
@@ -470,7 +471,7 @@ function FinalCard({
             <Text style={styles.finalName}>{name}</Text> build independence, while leaving plenty
             of time for the things they love.
           </Text>
-          <Text style={styles.finalCta}>Let's go!</Text>
+          <Text style={styles.finalCta}>Let&apos;s go!</Text>
         </View>
         <View style={styles.grassScene} pointerEvents="none">
           <Image source={GRASS} style={styles.grass} resizeMode="stretch" />

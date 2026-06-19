@@ -33,7 +33,8 @@ export function useLocalDailyCompletion(
   userId: string,
   routineId: string,
   childName?: string,
-  initialCompletion?: LocalDailyCompletion | null
+  initialCompletion?: LocalDailyCompletion | null,
+  refreshSignal?: string | number
 ): DailyCompletionState {
   const hasInitialForToday =
     Boolean(initialCompletion) && initialCompletion?.date === getTodayISO();
@@ -98,7 +99,7 @@ export function useLocalDailyCompletion(
 
     load();
     return () => { mounted = false; };
-  }, [routineId, initialCompletion]);
+  }, [routineId, initialCompletion, refreshSignal]);
 
   const markStepDone = useCallback(
     async (
