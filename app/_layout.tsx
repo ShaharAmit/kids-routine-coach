@@ -21,7 +21,7 @@ function HeaderTitle({ segment }: { segment: DaySegment }) {
 
 export default function RootLayout() {
   const pathname = usePathname();
-  const prevPathnameRef = useRef<string>('/');
+  const prevPathnameRef = useRef<string | null>(null);
   const [segment, setSegment] = useState<DaySegment>(getCurrentSegment);
   const [showDecorations, setShowDecorations] = useState(false);
 
@@ -35,18 +35,17 @@ export default function RootLayout() {
 
   // Show moon/sun with 1 second delay when entering home screen
   useEffect(() => {
-    const wasNotHome = prevPathnameRef.current !== '/';
+    const wasNotHome = prevPathnameRef.current !== null && prevPathnameRef.current !== '/';
     const isNowHome = pathname === '/';
     
-    if (isNowHome && wasNotHome) {
-      // Just entered home screen - start delay
+    if (isNowHome && (wasNotHome || prevPathnameRef.current === null)) {
+      // Just entered home screen OR app is starting on home screen - start delay
       setShowDecorations(false);
       const timer = setTimeout(() => setShowDecorations(true), 1000);
       prevPathnameRef.current = pathname;
       return () => clearTimeout(timer);
-    } else if (isNowHome && !wasNotHome) {
+    } else if (isNowHome && prevPathnameRef.current === '/') {
       // Already on home screen, do nothing
-      prevPathnameRef.current = pathname;
       return;
     } else {
       // Left home screen
