@@ -16,15 +16,9 @@ import { ensureAuth } from '../services/firebase';
 import { useUserRoutines } from '../hooks/useRoutine';
 import { getUserTotalStars } from '../services/stars';
 import { ChildProfile, DailyProgress, Routine } from '../types';
+import { colors, fs, ms, vs } from '../theme';
+import { getTodayISO } from '../utils/date';
 import { isMorningTime } from '../utils/timeOfDay';
-
-function getTodayISO(): string {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
 
 function completionStorageKey(routineId: string): string {
   return `daily_completion_${routineId}`;
@@ -40,34 +34,25 @@ async function computeDailyProgress(routines: Routine[]): Promise<DailyProgress>
   for (const routine of routines) {
     const raw = await AsyncStorage.getItem(completionStorageKey(routine.id));
     const parsed = raw
-      ? (JSON.parse(raw) as { date?: string; morning?: number[]; evening?: number[] })
+      ? (JSON.parse(raw) as { date?: string; morning?: string[]; evening?: string[] })
       : null;
-    const morningSet = new Set<number>(parsed?.date === today ? parsed?.morning ?? [] : []);
-    const eveningSet = new Set<number>(parsed?.date === today ? parsed?.evening ?? [] : []);
+    const morningSet = new Set<string>(parsed?.date === today ? parsed?.morning ?? [] : []);
+    const eveningSet = new Set<string>(parsed?.date === today ? parsed?.evening ?? [] : []);
 
     routine.activityStack.forEach((_, index) => {
+      const stepId = routine.stepIds?.[index] ?? `step_${index}`;
       const stepTime = routine.stepTimes?.[index] ?? routine.scheduledTime;
       if (isMorningTime(stepTime)) {
         morningTotal += 1;
-        if (morningSet.has(index)) morningCompleted += 1;
+        if (morningSet.has(stepId)) morningCompleted += 1;
       } else {
         eveningTotal += 1;
-        if (eveningSet.has(index)) eveningCompleted += 1;
+        if (eveningSet.has(stepId)) eveningCompleted += 1;
       }
     });
   }
 
   return { morningCompleted, morningTotal, eveningCompleted, eveningTotal };
-}
-
-function pickPrimaryRoutine(routines: Routine[], userId: string): Routine | null {
-  if (routines.length === 0) return null;
-  const canonicalRoutineId = userId ? `routine_${userId}` : '';
-  if (canonicalRoutineId) {
-    const canonical = routines.find((routine) => routine.id === canonicalRoutineId);
-    if (canonical) return canonical;
-  }
-  return routines[0];
 }
 
 export default function RewardsScreen() {
@@ -127,7 +112,6 @@ export default function RewardsScreen() {
 
   const routinesResult = useUserRoutines(userId);
   const routines = useMemo(() => routinesResult?.routines ?? [], [routinesResult?.routines]);
-  const primaryRoutine = useMemo(() => pickPrimaryRoutine(routines, userId), [routines, userId]);
 
   useEffect(() => {
     if (pathname !== '/rewards' || !userId) return;
@@ -138,7 +122,7 @@ export default function RewardsScreen() {
         const [profileResult, starsResult, progressResult] = await Promise.allSettled([
           getChildProfile(),
           getUserTotalStars(userId),
-          computeDailyProgress(primaryRoutine ? [primaryRoutine] : []),
+          computeDailyProgress(routines),
         ]);
 
         if (!mounted) return;
@@ -174,7 +158,7 @@ export default function RewardsScreen() {
     return () => {
       mounted = false;
     };
-  }, [pathname, userId, primaryRoutine]);
+  }, [pathname, userId, routines]);
 
   if (loading || !profile) {
     return (
@@ -183,10 +167,10 @@ export default function RewardsScreen() {
           options={{
             headerTitle: 'Rewards',
             headerTitleAlign: 'center',
-            headerStyle: { backgroundColor: '#c6e8e8' },
+            headerStyle: { backgroundColor: colors.morningBg },
             headerShadowVisible: false,
-            headerTintColor: '#1A2533',
-            headerTitleStyle: { color: '#1A2533', fontWeight: '700', fontSize: 17 },
+            headerTintColor: colors.textInk,
+            headerTitleStyle: { color: colors.textInk, fontWeight: '700', fontSize: fs(17) },
           }}
         />
         <CloudsBackground />
@@ -207,10 +191,10 @@ export default function RewardsScreen() {
         options={{
           headerTitle: `${profile.childName}'s Rewards`,
           headerTitleAlign: 'center',
-          headerStyle: { backgroundColor: '#c6e8e8' },
+          headerStyle: { backgroundColor: colors.morningBg },
           headerShadowVisible: false,
-          headerTintColor: '#1A2533',
-          headerTitleStyle: { color: '#1A2533', fontWeight: '700', fontSize: 17 },
+          headerTintColor: colors.textInk,
+          headerTitleStyle: { color: colors.textInk, fontWeight: '700', fontSize: fs(17) },
         }}
       />
       <CloudsBackground />
@@ -221,7 +205,7 @@ export default function RewardsScreen() {
         {/* Today's Journey Section */}
         <View style={styles.sectionContainer}>
           <Text style={styles.sectionTitle}>Today&apos;s Journey</Text>
-          {primaryRoutine ? (
+          {routines.length > 0 ? (
             <>
               <DailyProgressCard segment="morning" progress={dailyProgress} />
               <DailyProgressCard segment="evening" progress={dailyProgress} />
@@ -248,7 +232,7 @@ export default function RewardsScreen() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: '#c6e8e8',
+    backgroundColor: colors.morningBg,
   },
   container: {
     flex: 1,
@@ -259,18 +243,18 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   content: {
-    padding: 16,
-    paddingBottom: 130,
+    padding: ms(16),
+    paddingBottom: vs(130),
   },
   sectionContainer: {
-    marginTop: 20,
-    marginBottom: 20,
+    marginTop: vs(20),
+    marginBottom: vs(20),
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: fs(18),
     fontWeight: '700',
-    color: '#1F2937',
-    marginBottom: 12,
+    color: colors.textDark,
+    marginBottom: vs(12),
   },
   loadingContainer: {
     flex: 1,
@@ -278,43 +262,43 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   loadingText: {
-    fontSize: 16,
-    color: '#64748B',
+    fontSize: fs(16),
+    color: colors.textMuted,
   },
   emptyState: {
-    backgroundColor: '#FFF',
-    borderRadius: 12,
-    padding: 20,
+    backgroundColor: colors.white,
+    borderRadius: ms(12),
+    padding: ms(20),
     alignItems: 'center',
   },
   emptyStateText: {
-    fontSize: 16,
+    fontSize: fs(16),
     fontWeight: '600',
-    color: '#1F2937',
-    marginBottom: 8,
+    color: colors.textDark,
+    marginBottom: vs(8),
   },
   emptyStateSubtext: {
-    fontSize: 14,
-    color: '#64748B',
+    fontSize: fs(14),
+    color: colors.textMuted,
     textAlign: 'center',
   },
   infoBox: {
     backgroundColor: '#E6F2FF',
-    borderRadius: 12,
-    padding: 14,
+    borderRadius: ms(12),
+    padding: ms(14),
     borderLeftWidth: 4,
-    borderLeftColor: '#4A90D9',
-    marginTop: 20,
+    borderLeftColor: colors.primary,
+    marginTop: vs(20),
   },
   infoLabel: {
-    fontSize: 14,
+    fontSize: fs(14),
     fontWeight: '700',
-    color: '#1F2937',
-    marginBottom: 6,
+    color: colors.textDark,
+    marginBottom: vs(6),
   },
   infoText: {
-    fontSize: 13,
-    color: '#475569',
-    lineHeight: 19,
+    fontSize: fs(13),
+    color: colors.textSlate,
+    lineHeight: fs(19),
   },
 });

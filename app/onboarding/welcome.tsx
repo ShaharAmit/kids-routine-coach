@@ -8,6 +8,7 @@ import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { downloadWelcomeAssets, getWelcomeAssetPaths } from '../../services/assetCacheService';
 import { getOrExtractMobilePoster } from '../../services/mobileVideoCache';
+import { colors, fs, ms, s, vs } from '../../theme';
 
 type WelcomeVideoPlayerProps = {
   videoPath: string;
@@ -184,7 +185,7 @@ export default function WelcomeScreen() {
       )}
 
       {videoDone ? (
-        <Animated.View entering={FadeIn.duration(300)} style={[styles.buttonWrap, { bottom: 16 + insets.bottom }]}>
+        <Animated.View entering={FadeIn.duration(300)} style={[styles.buttonWrap, { bottom: vs(16) + insets.bottom }]}>
           <TouchableOpacity
             style={styles.button}
             onPress={() => router.replace('/onboarding/questionnaire' as never)}
@@ -194,7 +195,7 @@ export default function WelcomeScreen() {
           </TouchableOpacity>
         </Animated.View>
       ) : (
-        <View style={[styles.waitingSpacer, { bottom: 16 + insets.bottom }]} />
+        <View style={[styles.waitingSpacer, { bottom: vs(16) + insets.bottom }]} />
       )}
     </View>
   );
@@ -226,33 +227,33 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   fallbackEmoji: {
-    fontSize: 72,
+    fontSize: fs(72),
     color: '#FFF',
   },
   preparingText: {
-    marginTop: 14,
-    fontSize: 15,
+    marginTop: vs(14),
+    fontSize: fs(15),
     fontWeight: '600',
     color: '#FFF',
   },
   waitingSpacer: {
     position: 'absolute',
-    height: 56,
+    height: vs(56),
   },
   buttonWrap: {
     width: '100%',
-    paddingHorizontal: 20,
+    paddingHorizontal: s(20),
     position: 'absolute',
   },
   button: {
-    backgroundColor: '#4A90D9',
-    borderRadius: 16,
-    paddingVertical: 16,
+    backgroundColor: colors.primary,
+    borderRadius: ms(16),
+    paddingVertical: vs(16),
     alignItems: 'center',
   },
   buttonText: {
     color: '#FFF',
-    fontSize: 17,
+    fontSize: fs(17),
     fontWeight: '800',
   },
 });

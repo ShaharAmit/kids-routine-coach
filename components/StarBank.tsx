@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { STAR_LEVELS, getStarLevel, getStarsToNextLevel } from '../types';
+import { colors, fs, ms, s, vs } from '../theme';
 
 interface StarBankProps {
   totalStars: number;
@@ -56,80 +57,80 @@ export default function StarBank({ totalStars }: StarBankProps) {
 const styles = StyleSheet.create({
   container: {
     backgroundColor: '#FFF',
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 16,
+    borderRadius: ms(16),
+    padding: ms(20),
+    marginBottom: vs(16),
     borderWidth: 2,
     borderColor: '#FFE8B6',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
+    shadowOffset: { width: s(0), height: vs(2) },
     shadowOpacity: 0.08,
-    shadowRadius: 4,
+    shadowRadius: ms(4),
     elevation: 3,
   },
   bankSection: {
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: vs(16),
   },
   starCount: {
-    fontSize: 48,
+    fontSize: fs(48),
     fontWeight: '800',
-    color: '#FFB800',
-    lineHeight: 52,
+    color: colors.star,
+    lineHeight: fs(52),
   },
   starLabel: {
-    fontSize: 16,
+    fontSize: fs(16),
     fontWeight: '600',
-    color: '#1F2937',
-    marginTop: 4,
+    color: colors.textDark,
+    marginTop: vs(4),
   },
   levelSection: {
     borderTopWidth: 1,
     borderTopColor: '#F0F0F0',
-    paddingTop: 16,
+    paddingTop: vs(16),
   },
   levelBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#F8F9FB',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 12,
+    borderRadius: ms(12),
+    padding: ms(12),
+    marginBottom: vs(12),
   },
   levelEmoji: {
-    fontSize: 32,
-    marginRight: 12,
+    fontSize: fs(32),
+    marginRight: s(12),
   },
   levelName: {
-    fontSize: 16,
+    fontSize: fs(16),
     fontWeight: '700',
-    color: '#1F2937',
+    color: colors.textDark,
   },
   nextLevelInfo: {
-    marginTop: 8,
+    marginTop: vs(8),
   },
   nextLevelLabel: {
-    fontSize: 13,
+    fontSize: fs(13),
     fontWeight: '600',
-    color: '#475569',
-    marginBottom: 8,
+    color: colors.textSlate,
+    marginBottom: vs(8),
   },
   progressBarContainer: {
-    height: 8,
-    backgroundColor: '#E2E8F0',
-    borderRadius: 4,
+    height: s(8),
+    backgroundColor: colors.border,
+    borderRadius: ms(4),
     overflow: 'hidden',
-    marginBottom: 8,
+    marginBottom: vs(8),
   },
   progressBar: {
     height: '100%',
-    backgroundColor: '#4A90D9',
-    borderRadius: 4,
+    backgroundColor: colors.primary,
+    borderRadius: ms(4),
   },
   starsNeeded: {
-    fontSize: 12,
+    fontSize: fs(12),
     fontWeight: '600',
-    color: '#64748B',
+    color: colors.textMuted,
     textAlign: 'center',
   },
 });

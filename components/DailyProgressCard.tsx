@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { DailyProgress } from '../types';
+import { colors, fs, ms, s, vs } from '../theme';
 
 interface DailyProgressCardProps {
   segment: 'morning' | 'evening';
@@ -17,7 +18,7 @@ export default function DailyProgressCard({ segment, progress }: DailyProgressCa
   const emoji = isSegmentMorning ? '🌅' : '🌙';
   const label = isSegmentMorning ? 'Morning' : 'Evening';
   const bgColor = isSegmentMorning ? '#FFF8E6' : '#E6F2FF';
-  const accentColor = isSegmentMorning ? '#FFB800' : '#4A90D9';
+  const accentColor = isSegmentMorning ? colors.star : colors.primary;
 
   return (
     <View style={[styles.container, { backgroundColor: bgColor }]}>
@@ -49,48 +50,48 @@ export default function DailyProgressCard({ segment, progress }: DailyProgressCa
 
 const styles = StyleSheet.create({
   container: {
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 10,
+    borderRadius: ms(12),
+    padding: ms(14),
+    marginBottom: vs(10),
     borderWidth: 1,
-    borderColor: '#E4EAF1',
+    borderColor: colors.borderLight,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: vs(12),
   },
   emoji: {
-    fontSize: 24,
-    marginRight: 10,
+    fontSize: fs(24),
+    marginRight: s(10),
   },
   label: {
-    fontSize: 16,
+    fontSize: fs(16),
     fontWeight: '700',
-    color: '#1F2937',
+    color: colors.textDark,
     flex: 1,
   },
   badge: {
-    fontSize: 12,
+    fontSize: fs(12),
     fontWeight: '600',
     color: '#10B981',
     backgroundColor: '#ECFDF5',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
+    paddingHorizontal: s(8),
+    paddingVertical: vs(4),
+    borderRadius: ms(6),
   },
   progressSection: {
-    gap: 10,
+    gap: s(10),
   },
   progressBarContainer: {
-    height: 10,
+    height: s(10),
     backgroundColor: 'rgba(0, 0, 0, 0.1)',
-    borderRadius: 5,
+    borderRadius: ms(5),
     overflow: 'hidden',
   },
   progressBar: {
     height: '100%',
-    borderRadius: 5,
+    borderRadius: ms(5),
   },
   statsRow: {
     flexDirection: 'row',
@@ -98,15 +99,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   statsText: {
-    fontSize: 13,
-    color: '#475569',
+    fontSize: fs(13),
+    color: colors.textSlate,
   },
   statsBold: {
     fontWeight: '700',
-    color: '#1F2937',
+    color: colors.textDark,
   },
   percentage: {
-    fontSize: 13,
+    fontSize: fs(13),
     fontWeight: '700',
   },
 });

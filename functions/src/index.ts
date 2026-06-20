@@ -202,6 +202,7 @@ export const generateRoutineAudio = onCall(
     }
 
     const cacheRef = db.collection('audio_cache').doc(cacheKey);
+    let tmpFilePath: string | null = null;
 
     try {
       const selectedVoice = mapVoiceToGemini(voice);
@@ -210,7 +211,8 @@ export const generateRoutineAudio = onCall(
       const audioBuffer = pcm16ToWav(rawPcmBuffer);
 
       // Write to temp file
-      const tmpFilePath = path.join(os.tmpdir(), `${cacheKey}.wav`);
+      const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      tmpFilePath = path.join(os.tmpdir(), `${cacheKey}-${uniqueSuffix}.wav`);
       fs.writeFileSync(tmpFilePath, audioBuffer);
 
       // Upload to Firebase Storage
@@ -233,9 +235,6 @@ export const generateRoutineAudio = onCall(
           },
         },
       });
-
-      // Clean up temp file
-      fs.unlinkSync(tmpFilePath);
 
       // Make publicly readable and return a stable public URL.
       const file = bucket.file(storagePath);
@@ -266,6 +265,14 @@ export const generateRoutineAudio = onCall(
       await cacheRef.set({ status: 'error', updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
 
       throw new HttpsError('internal', `TTS generation failed: ${message}`);
+    } finally {
+      if (tmpFilePath && fs.existsSync(tmpFilePath)) {
+        try {
+          fs.unlinkSync(tmpFilePath);
+        } catch (cleanupErr) {
+          console.warn('[generateRoutineAudio] Temp cleanup failed:', cleanupErr);
+        }
+      }
     }
   });
 
@@ -344,8 +351,11 @@ export const awardRoutineStepStar = onCall(
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       throw new HttpsError('invalid-argument', 'date must be in YYYY-MM-DD format.');
     }
-    if (!Number.isInteger(stepIndex) || stepIndex < 0) {
-      throw new HttpsError('invalid-argument', 'stepIndex must be a non-negative integer.');
+    if (!Number.isInteger(stepIndex) || stepIndex < -1) {
+      throw new HttpsError(
+        'invalid-argument',
+        'stepIndex must be an integer greater than or equal to -1.'
+      );
     }
     if (!Number.isInteger(stars) || stars <= 0 || stars > 10) {
       throw new HttpsError('invalid-argument', 'stars must be an integer between 1 and 10.');
@@ -354,9 +364,13 @@ export const awardRoutineStepStar = onCall(
       throw new HttpsError('permission-denied', 'Cannot award stars for a different user.');
     }
 
-    const statsRef = db.collection('user_stats').doc(userId);
-    const eventId = `${date}_${routineId}_${segment}_${stepIndex}`;
-    const awardRef = statsRef.collection('awards').doc(eventId);
+    const userRef = db.collection('users').doc(userId);
+    const statsRef = userRef.collection('stats').doc('main');
+    // Use segment-based eventId when stepIndex is -1 (segment completion), otherwise use step-based
+    const eventId = stepIndex === -1
+      ? `${date}_${routineId}_${segment}`
+      : `${date}_${routineId}_${segment}_${stepIndex}`;
+    const awardRef = userRef.collection('awards').doc(eventId);
 
     return db.runTransaction(async (tx) => {
       const [statsSnap, awardSnap] = await Promise.all([tx.get(statsRef), tx.get(awardRef)]);

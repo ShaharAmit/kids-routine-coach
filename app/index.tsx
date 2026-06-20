@@ -4,7 +4,6 @@ import {
   AppState,
   Image,
   Modal,
-  Platform,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -28,16 +27,11 @@ import { getChildProfile, saveChildProfile } from '../services/profile';
 import { awardRoutineStepStar } from '../services/stars';
 import { ensureAudioForRoutine } from '../services/tts';
 import { Routine } from '../types';
-import { getCurrentSegment, MORNING_START_MINUTES, EVENING_START_MINUTES } from '../utils/timeOfDay';
+import { getCurrentSegment, isMorningTime } from '../utils/timeOfDay';
+import { getTodayISO } from '../utils/date';
+import { colors, fs, ms, ROUNDED_FONT, s, vs } from '../theme';
 
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-const getTodayISO = () => {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-};
 
 const TASK_IMAGES: Record<string, ReturnType<typeof require>> = {
   brush_teeth: require('../assets/images/tooth_brush.png'),
@@ -59,21 +53,6 @@ const TASK_SUBTITLES: Record<string, string> = {
 
 const TASK_FALLBACK_SUBTITLE = 'Close your eyes and rest';
 
-function timeToMinutes(value: string): number {
-  const [hourStr, minuteStr] = value.split(':');
-  const hour = Number(hourStr);
-  const minute = Number(minuteStr);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
-    return 8 * 60;
-  }
-  return hour * 60 + minute;
-}
-
-function isMorningTime(value: string): boolean {
-  const minutes = timeToMinutes(value);
-  return minutes >= MORNING_START_MINUTES && minutes < EVENING_START_MINUTES;
-}
-
 function routineHasTasksInSegment(routine: Routine, segment: 'morning' | 'evening'): boolean {
   return routine.activityStack.some((_, index) => {
     const time = routine.stepTimes?.[index] ?? routine.scheduledTime;
@@ -84,16 +63,9 @@ function routineHasTasksInSegment(routine: Routine, segment: 'morning' | 'evenin
 
 function pickPrimaryRoutine(
   routines: Routine[],
-  userId: string,
   segment: 'morning' | 'evening'
 ): Routine | null {
   if (routines.length === 0) return null;
-
-  const canonicalRoutineId = userId ? `routine_${userId}` : '';
-  if (canonicalRoutineId) {
-    const canonical = routines.find((routine) => routine.id === canonicalRoutineId);
-    if (canonical) return canonical;
-  }
 
   const withSegmentTasks = routines.find((routine) => routineHasTasksInSegment(routine, segment));
   if (withSegmentTasks) return withSegmentTasks;
@@ -101,11 +73,7 @@ function pickPrimaryRoutine(
   return routines[0];
 }
 
-const roundedFontBold = Platform.select({
-  ios: 'Avenir Next Rounded',
-  android: 'sans-serif',
-  default: 'System',
-});
+const roundedFontBold = ROUNDED_FONT;
 
 export default function HomeScreen() {
   const [userId, setUserId] = useState('');
@@ -137,16 +105,16 @@ export default function HomeScreen() {
   }, [bootstrapSnapshot, routines]);
 
   const primaryRoutine = useMemo(
-    () => pickPrimaryRoutine(mergedRoutines, userId, segment),
-    [mergedRoutines, userId, segment]
+    () => pickPrimaryRoutine(mergedRoutines, segment),
+    [mergedRoutines, segment]
   );
   const initialCompletion = primaryRoutine
     ? bootstrapSnapshot?.completions[primaryRoutine.id] ?? null
     : null;
 
   const {
-    completedMorningIndexes,
-    completedEveningIndexes,
+    completedMorningStepIds,
+    completedEveningStepIds,
     markStepDone,
     loading: completionLoading,
   } = useLocalDailyCompletion(
@@ -211,7 +179,13 @@ export default function HomeScreen() {
       .filter((index) => index >= 0);
   }, [primaryRoutine, segment]);
 
-  const completedIndexes = segment === 'morning' ? completedMorningIndexes : completedEveningIndexes;
+  const visibleStepIds = useMemo(() => {
+    if (!primaryRoutine) return [] as string[];
+    const stepIds = primaryRoutine.stepIds ?? [];
+    return visibleStepIndexes.map((index) => stepIds[index] ?? `step_${index}`);
+  }, [primaryRoutine, visibleStepIndexes]);
+
+  const completedStepIds = segment === 'morning' ? completedMorningStepIds : completedEveningStepIds;
 
   useEffect(() => {
     if (visibleStepIndexes.length === 0) {
@@ -280,47 +254,58 @@ export default function HomeScreen() {
   }, [primaryRoutine]);
 
   const allScopedDone = useMemo(() => {
-    if (visibleStepIndexes.length === 0) return false;
-    return visibleStepIndexes.every((index) => completedIndexes.has(index));
-  }, [visibleStepIndexes, completedIndexes]);
+    if (visibleStepIds.length === 0) return false;
+    return visibleStepIds.every((id) => completedStepIds.has(id));
+  }, [visibleStepIds, completedStepIds]);
 
   useEffect(() => {
     if (!allScopedDone) return;
     if (trophyShownThisSession[segment]) return;
 
+    // Award 1 star for completing the entire routine segment (not per step)
+    const awardSegmentStar = async () => {
+      if (userId && primaryRoutine) {
+        try {
+          const award = await awardRoutineStepStar({
+            userId,
+            routineId: primaryRoutine.id,
+            date: getTodayISO(),
+            segment,
+            stepIndex: -1, // -1 indicates segment completion, not a specific step
+          });
+          if (award.awarded) {
+            const profile = await getChildProfile();
+            if (profile && profile.userId === userId) {
+              await saveChildProfile({
+                ...profile,
+                totalStarsEarned: award.totalStars,
+                updatedAt: Date.now(),
+              });
+            }
+          }
+        } catch (err) {
+          console.warn('[Home] Failed to award segment star:', err);
+        }
+      }
+    };
+
+    awardSegmentStar();
     setTrophyVisible(true);
     setTrophyShownThisSession((prev) => ({ ...prev, [segment]: true }));
-  }, [allScopedDone, segment, trophyShownThisSession]);
+  }, [allScopedDone, segment, trophyShownThisSession, userId, primaryRoutine]);
 
   const handleStepComplete = useCallback(async () => {
     if (!primaryRoutine || visibleStepIndexes.length === 0) return;
+    const currentStepId = primaryRoutine.stepIds?.[currentStepIndex] ?? `step_${currentStepIndex}`;
 
-    await markStepDone(segment, currentStepIndex, visibleStepIndexes.length);
-    if (userId) {
-      try {
-        const award = await awardRoutineStepStar({
-          userId,
-          routineId: primaryRoutine.id,
-          date: getTodayISO(),
-          segment,
-          stepIndex: currentStepIndex,
-        });
-        if (award.awarded) {
-          const profile = await getChildProfile();
-          if (profile && profile.userId === userId) {
-            await saveChildProfile({
-              ...profile,
-              totalStarsEarned: award.totalStars,
-              updatedAt: Date.now(),
-            });
-          }
-        }
-      } catch (err) {
-        console.warn('[Home] Failed to award star:', err);
-      }
+    const newlyCompleted = await markStepDone(segment, currentStepId, visibleStepIndexes.length);
+
+    // Star awarding now happens in the allScopedDone effect,
+    // so we don't award here anymore. Just mark the step done and switch back to tasks view.
+    if (newlyCompleted) {
+      setViewMode('tasks');
     }
-    setViewMode('tasks');
-  }, [primaryRoutine, visibleStepIndexes, markStepDone, segment, currentStepIndex, userId]);
+  }, [primaryRoutine, visibleStepIndexes, markStepDone, segment, currentStepIndex]);
 
 
   if ((loading || completionLoading) && !primaryRoutine) {
@@ -353,7 +338,7 @@ export default function HomeScreen() {
   }
 
   const isEvening = segment === 'evening';
-  const completedCount = visibleStepIndexes.filter((index) => completedIndexes.has(index)).length;
+  const completedCount = visibleStepIds.filter((id) => completedStepIds.has(id)).length;
 
   const currentActivityStep = primaryRoutine.activityStack[currentStepIndex] ?? [];
   const scopedPosition = Math.max(0, visibleStepIndexes.indexOf(currentStepIndex));
@@ -364,7 +349,7 @@ export default function HomeScreen() {
         options={{
           headerStyle: { backgroundColor: isEvening ? '#2e4385' : '#c6e8e8' },
           headerTintColor: isEvening ? '#FFF' : '#1E7B7B',
-          headerTitleStyle: { fontFamily: roundedFontBold ?? 'System', fontSize: 17, color: isEvening ? '#FFF' : '#1E7B7B' },
+          headerTitleStyle: { fontFamily: roundedFontBold ?? 'System', fontSize: fs(17), color: isEvening ? '#FFF' : '#1E7B7B' },
           headerShadowVisible: false,
         }}
       />
@@ -402,7 +387,8 @@ export default function HomeScreen() {
                   const step = primaryRoutine.activityStack[index] ?? [];
                   const metas = step.map((key) => ACTIVITIES[key]).filter(Boolean);
                   const primaryLabel = metas[0]?.label ?? 'Task';
-                  const done = completedIndexes.has(index);
+                  const stepId = primaryRoutine.stepIds?.[index] ?? `step_${index}`;
+                  const done = completedStepIds.has(stepId);
                   const primaryActivityKey = step[0] ?? '';
                   const taskImage = TASK_IMAGES[primaryActivityKey] ?? TASK_FALLBACK_IMAGE;
                   const taskSubtitle = TASK_SUBTITLES[primaryActivityKey] ?? TASK_FALLBACK_SUBTITLE;
@@ -441,8 +427,15 @@ export default function HomeScreen() {
 
                 {visibleStepIndexes.length === 0 ? (
                   <View style={styles.emptyState}>
-                    <Text style={styles.emptyTitle}>No tasks in this time block</Text>
-                    <Text style={styles.emptySub}>Adjust step times in the questionnaire.</Text>
+                    <TouchableOpacity
+                      style={styles.emptyAddButton}
+                      onPress={() => router.push(`/parent/create?segment=${segment}` as never)}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.emptyAddIcon}>＋</Text>
+                    </TouchableOpacity>
+                    <Text style={styles.emptyTitle}>No activities yet</Text>
+                    <Text style={styles.emptySub}>Tap + to add activities for this routine.</Text>
                   </View>
                 ) : null}
               </ScrollView>
@@ -479,7 +472,7 @@ export default function HomeScreen() {
           <ActivityIndicator size="large" color="#5F8F86" />
           <Text style={styles.loadingText}>Preparing media...</Text>
           <TouchableOpacity
-            style={[styles.primaryButton, { marginTop: 14 }]}
+            style={[styles.primaryButton, { marginTop: vs(14) }]}
             onPress={() => setViewMode('tasks')}
             activeOpacity={0.9}
           >
@@ -513,34 +506,34 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#c6e8e8',
+    backgroundColor: colors.morningBg,
   },
   containerMorning: {
-    backgroundColor: '#c6e8e8',
+    backgroundColor: colors.morningBg,
   },
   containerEvening: {
-    backgroundColor: '#2e4385',
+    backgroundColor: colors.eveningBg,
   },
   centered: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FAFAFA',
-    padding: 24,
+    backgroundColor: colors.appBg,
+    padding: ms(24),
   },
   loadingText: {
-    marginTop: 14,
-    fontSize: 16,
+    marginTop: vs(14),
+    fontSize: fs(16),
     color: '#5A6A64',
   },
   errorText: {
-    fontSize: 20,
+    fontSize: fs(20),
     fontWeight: '700',
-    color: '#D65050',
-    marginBottom: 8,
+    color: colors.danger,
+    marginBottom: vs(8),
   },
   errorSub: {
-    fontSize: 14,
+    fontSize: fs(14),
     color: '#6A6A6A',
     textAlign: 'center',
   },
@@ -552,49 +545,49 @@ const styles = StyleSheet.create({
   },
   moon: {
     position: 'absolute',
-    top: -30,
-    right: 14,
-    width: 96,
-    height: 96,
+    top: vs(-30),
+    right: s(14),
+    width: s(96),
+    height: s(96),
     zIndex: 7!,
   },
   sun: {
     position: 'absolute',
-    top: -30,
-    right: 12,
-    width: 104,
-    height: 104,
+    top: vs(-30),
+    right: s(12),
+    width: s(104),
+    height: s(104),
     zIndex: 7!,
   },
   tasksHeader: {
     alignItems: 'center',
-    paddingTop: 12,
-    paddingBottom: 6,
-    paddingHorizontal: 16,
+    paddingTop: vs(12),
+    paddingBottom: vs(6),
+    paddingHorizontal: s(16),
   },
   tasksTitle: {
-    fontSize: 44,
-    lineHeight: 48,
+    fontSize: fs(44),
+    lineHeight: fs(48),
     fontWeight: '800',
     letterSpacing: 1.2,
-    color: '#EAF0FF',
+    color: colors.eveningTitle,
     fontFamily: roundedFontBold ?? 'System',
   },
   tasksTitleMorning: {
-    color: '#1E4E79',
+    color: colors.morningTitle,
   },
   tasksSubtitle: {
-    marginTop: 4,
-    fontSize: 30,
-    color: '#B9C6E8',
+    marginTop: vs(4),
+    fontSize: fs(30),
+    color: colors.eveningSubtitle,
     fontFamily: roundedFontBold ?? 'System',
   },
   tasksSubtitleMorning: {
-    color: '#356491',
+    color: colors.morningSubtitle,
   },
   tasksProgress: {
-    marginTop: 6,
-    fontSize: 15,
+    marginTop: vs(6),
+    fontSize: fs(15),
     color: '#8E9CC4',
     fontWeight: '600',
   },
@@ -602,16 +595,16 @@ const styles = StyleSheet.create({
     color: '#4E73A0',
   },
   prepBadge: {
-    marginTop: 8,
-    paddingVertical: 7,
-    paddingHorizontal: 12,
-    borderRadius: 99,
+    marginTop: vs(8),
+    paddingVertical: vs(7),
+    paddingHorizontal: s(12),
+    borderRadius: ms(99),
     backgroundColor: '#FFF8D8',
     borderWidth: 1,
     borderColor: '#E8D28E',
   },
   prepBadgeText: {
-    fontSize: 12,
+    fontSize: fs(12),
     color: '#705E1A',
     fontWeight: '700',
   },
@@ -619,39 +612,39 @@ const styles = StyleSheet.create({
     flex: 1,
     maxHeight: '65%',
     marginVertical: 'auto',
-    paddingHorizontal: 18,
-    paddingTop: 2,
-    paddingBottom: 6,
+    paddingHorizontal: s(18),
+    paddingTop: vs(2),
+    paddingBottom: vs(6),
   },
   card: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 28,
+    backgroundColor: colors.white,
+    borderRadius: ms(28),
     overflow: 'hidden',
-    shadowColor: '#0B2040',
+    shadowColor: colors.shadow,
     shadowOpacity: 0.18,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 8 },
+    shadowRadius: ms(16),
+    shadowOffset: { width: 0, height: vs(8) },
     elevation: 4,
   },
   cardMorning: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.white,
   },
   tasksList: {
-    paddingHorizontal: 14,
-    paddingTop: 8,
-    paddingBottom: 96,
+    paddingHorizontal: s(14),
+    paddingTop: vs(8),
+    paddingBottom: vs(96),
   },
   taskCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    marginBottom: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
+    backgroundColor: colors.white,
+    borderRadius: ms(20),
+    marginBottom: vs(12),
+    paddingVertical: vs(12),
+    paddingHorizontal: s(12),
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1.5,
-    borderColor: '#D7EBEB',
+    borderColor: colors.morningCardBorder,
     borderStyle: 'dashed',
   },
   taskCardDone: {
@@ -659,40 +652,40 @@ const styles = StyleSheet.create({
     borderColor: '#BFE3CF',
   },
   taskImageWrap: {
-    width: 60,
-    height: 60,
+    width: s(60),
+    height: s(60),
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 12,
+    marginRight: s(12),
   },
   taskImage: {
-    width: 56,
-    height: 56,
+    width: s(56),
+    height: s(56),
   },
   taskTextWrap: {
     flex: 1,
     minWidth: 0,
   },
   taskTitle: {
-    fontSize: 21,
+    fontSize: fs(21),
     color: '#1F4A52',
     fontFamily: roundedFontBold ?? 'System',
   },
   taskSubtitle: {
-    marginTop: 3,
-    fontSize: 14,
+    marginTop: vs(3),
+    fontSize: fs(14),
     color: '#5E8A86',
     fontWeight: '600',
   },
   checkWrap: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: s(34),
+    height: s(34),
+    borderRadius: ms(17),
     borderWidth: 2,
     borderColor: '#8CA3A1',
     alignItems: 'center',
     justifyContent: 'center',
-    marginLeft: 8,
+    marginLeft: s(8),
     backgroundColor: '#F7FBFA',
   },
   checkWrapDone: {
@@ -700,141 +693,158 @@ const styles = StyleSheet.create({
     backgroundColor: '#E9F4F2',
   },
   checkText: {
-    fontSize: 20,
-    lineHeight: 22,
+    fontSize: fs(20),
+    lineHeight: fs(22),
     color: '#5D7E78',
     fontWeight: '800',
   },
   checkTextDone: {
-    color: '#4F7F76',
+    color: colors.success,
   },
   backToTasksBtn: {
     position: 'absolute',
-    left: 16,
-    right: 16,
-    bottom: 24,
-    borderRadius: 18,
-    backgroundColor: '#4A90D9',
+    left: s(16),
+    right: s(16),
+    bottom: vs(24),
+    borderRadius: ms(18),
+    backgroundColor: colors.primary,
     alignItems: 'center',
-    paddingVertical: 12,
+    paddingVertical: vs(12),
   },
   backToTasksText: {
-    fontSize: 17,
+    fontSize: fs(17),
     fontWeight: '700',
-    color: '#FFFFFF',
+    color: colors.white,
   },
   menuOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.24)',
+    backgroundColor: colors.overlayLight,
   },
   menuPopover: {
     position: 'absolute',
-    borderRadius: 14,
-    backgroundColor: '#FFFFFF',
-    padding: 10,
+    borderRadius: ms(14),
+    backgroundColor: colors.white,
+    padding: ms(10),
     borderWidth: 1,
     borderColor: '#E1E8E7',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 5 },
+    shadowOffset: { width: 0, height: vs(5) },
     shadowOpacity: 0.16,
-    shadowRadius: 14,
+    shadowRadius: ms(14),
     elevation: 8,
   },
   menuTitle: {
-    fontSize: 12,
+    fontSize: fs(12),
     color: '#8B9A98',
     textTransform: 'uppercase',
     letterSpacing: 1,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
+    paddingHorizontal: s(8),
+    paddingVertical: vs(6),
     fontWeight: '700',
   },
   menuItem: {
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    borderRadius: 10,
+    paddingHorizontal: s(10),
+    paddingVertical: vs(10),
+    borderRadius: ms(10),
   },
   menuItemText: {
-    fontSize: 16,
+    fontSize: fs(16),
     color: '#233232',
     fontWeight: '600',
   },
   trophyOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+    backgroundColor: colors.overlay,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 18,
+    padding: ms(18),
   },
   trophyCard: {
     width: '100%',
-    maxWidth: 360,
-    borderRadius: 22,
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 18,
-    paddingVertical: 22,
+    maxWidth: s(360),
+    borderRadius: ms(22),
+    backgroundColor: colors.white,
+    paddingHorizontal: s(18),
+    paddingVertical: vs(22),
     alignItems: 'center',
   },
   trophyEmoji: {
-    fontSize: 72,
+    fontSize: fs(72),
   },
   trophyTitle: {
-    marginTop: 8,
-    fontSize: 28,
+    marginTop: vs(8),
+    fontSize: fs(28),
     textAlign: 'center',
     color: '#243231',
     fontFamily: roundedFontBold ?? 'System',
   },
   trophySub: {
-    marginTop: 6,
-    marginBottom: 18,
-    fontSize: 16,
+    marginTop: vs(6),
+    marginBottom: vs(18),
+    fontSize: fs(16),
     color: '#5E6F6E',
     textAlign: 'center',
   },
   primaryButton: {
-    backgroundColor: '#4A90D9',
-    borderRadius: 14,
-    paddingVertical: 12,
-    paddingHorizontal: 18,
+    backgroundColor: colors.primary,
+    borderRadius: ms(14),
+    paddingVertical: vs(12),
+    paddingHorizontal: s(18),
   },
   primaryButtonText: {
-    fontSize: 16,
+    fontSize: fs(16),
     fontWeight: '700',
-    color: '#FFFFFF',
+    color: colors.white,
   },
   emptyState: {
     alignItems: 'center',
-    paddingVertical: 28,
+    paddingVertical: vs(28),
+  },
+  emptyAddButton: {
+    width: s(62),
+    height: s(62),
+    borderRadius: ms(31),
+    backgroundColor: '#EAF5F3',
+    borderWidth: 2,
+    borderColor: '#B7D9D2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: vs(12),
+  },
+  emptyAddIcon: {
+    fontSize: fs(36),
+    lineHeight: fs(38),
+    color: '#3B8A7E',
+    fontWeight: '700',
   },
   emptyTitle: {
-    fontSize: 18,
+    fontSize: fs(18),
     fontWeight: '700',
     color: '#536362',
   },
   emptySub: {
-    marginTop: 4,
-    fontSize: 14,
+    marginTop: vs(4),
+    fontSize: fs(14),
     color: '#788583',
   },
   headerMenuButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#FFFFFFCC',
+    width: s(38),
+    height: s(38),
+    borderRadius: ms(19),
+    backgroundColor: colors.surfaceTranslucent,
     borderWidth: 1,
     borderColor: '#D8DCCF',
     alignItems: 'center',
     justifyContent: 'center',
   },
   headerMenuIcon: {
-    fontSize: 24,
-    color: '#FFFFFF',
-    lineHeight: 24,
+    fontSize: fs(24),
+    color: colors.white,
+    lineHeight: fs(24),
     fontFamily: roundedFontBold ?? 'System',
   },
   headerMenuIconMorning: {
-    color: '#1E7B7B',
+    color: colors.teal,
   },
   floatingMenu: {
     position: 'absolute',
@@ -844,33 +854,33 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-around',
     alignItems: 'flex-end',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    marginHorizontal: 12,
-    shadowColor: '#0B2040',
+    backgroundColor: colors.white,
+    borderRadius: ms(16),
+    paddingHorizontal: s(10),
+    paddingVertical: vs(8),
+    marginHorizontal: s(12),
+    shadowColor: colors.shadow,
     shadowOpacity: 0.12,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: -4 },
+    shadowRadius: ms(8),
+    shadowOffset: { width: 0, height: vs(-4) },
     elevation: 8,
   },
   menuItemContainer: {
     alignItems: 'center',
-    gap: 3,
+    gap: s(3),
   },
   menuIconButton: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: s(28),
+    height: s(28),
+    borderRadius: ms(14),
     alignItems: 'center',
     justifyContent: 'center',
   },
   menuIcon: {
-    fontSize: 14,
+    fontSize: fs(14),
   },
   menuLabel: {
-    fontSize: 9,
+    fontSize: fs(9),
     fontWeight: '600',
     color: '#536362',
     textAlign: 'center',

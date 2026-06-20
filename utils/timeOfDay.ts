@@ -1,6 +1,8 @@
+import { colors } from "@/theme/colors";
+
 // 04:00–14:59 → morning, 15:00–03:59 → evening
 export const MORNING_START_MINUTES = 4 * 60;
-export const EVENING_START_MINUTES = 15 * 60;
+export const EVENING_START_MINUTES = 9 * 60;
 
 export type DaySegment = 'morning' | 'evening';
 
@@ -28,9 +30,17 @@ export function isMorningTime(value: string): boolean {
 }
 
 export function segmentToTitle(segment: DaySegment): string {
-  return segment === 'morning' ? '🌅 Good Morning' : '🌙 Good Evening';
+  return segment === 'morning' ? 'Good Morning' : 'Good Evening';
 }
 
 export function segmentToSubtitle(segment: DaySegment): string {
   return segment === 'morning' ? "Let's start the day!" : 'Time to wind down';
+}
+
+export function segmentToTitleColor(segment: DaySegment): string {
+  return segment === 'morning' ? colors.morningTitle : colors.eveningTitle;
+}
+
+export function segmentToSubtitleColor(segment: DaySegment): string {
+  return segment === 'morning' ? colors.morningSubtitle : colors.eveningSubtitle;
 }

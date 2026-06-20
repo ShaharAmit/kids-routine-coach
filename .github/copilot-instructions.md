@@ -98,7 +98,7 @@ Post-setup core flow:
 - Header hamburger menu opens an animated popover with links to Settings, Questionnaire, and Add Routine.
 
 ### Routine Execution (`app/routine/[id].tsx`)
-1. `useRoutine(id)` subscribes to the Firestore `routines/{id}` document.
+1. `useRoutine(id, userId)` subscribes to the Firestore `users/{userId}/routines/{id}` document.
 2. `areAssetsReady()` checks local cache; if incomplete, `syncRoutineAssets()` downloads missing files.
 3. If audio is still missing, `ensureAudioForRoutine()` calls the `generateRoutineAudio` Cloud Function, then retries sync up to 4 times (1.5 s apart).
 4. The `segment` query param (`morning` | `evening`) filters which steps are shown.
@@ -156,7 +156,7 @@ Post-setup core flow:
 
 ### `hooks/`
 
-**`useRoutine.ts`** — Two Firestore real-time hooks: `useRoutine(routineId)` (single doc `onSnapshot`) and `useUserRoutines(userId)` (collection query `onSnapshot`). Also exports `saveRoutine(routine)` which upserts to `routines/{id}` using `setDoc`. Handles Firestore `[{ activities: string[] }]` ↔ `ActivityStep[]` serialization with backward compatibility for legacy flat `string[]` shapes.
+**`useRoutine.ts`** — Two Firestore real-time hooks: `useRoutine(routineId, userId)` (single doc `onSnapshot`) and `useUserRoutines(userId)` (collection `users/{userId}/routines` with `onSnapshot`). Also exports `saveRoutine(routine)` which upserts to `users/{userId}/routines/{id}` using `setDoc`. Handles Firestore `[{ activities: string[] }]` ↔ `ActivityStep[]` serialization with backward compatibility for legacy flat `string[]` shapes.
 
 ### `services/`
 
@@ -197,6 +197,9 @@ Post-setup core flow:
 
 | Collection | Document ID | Purpose |
 |---|---|---|
-| `routines` | `routine_{userId}` | One routine per user; `activityStack` stored as `[{ activities: string[] }]` |
+| `users/{userId}/routines` | `routine_{userId}` | User-scoped routines; `activityStack` stored as `[{ activities: string[] }]` |
+| `users/{userId}/trophies` | `{YYYY-MM-DD}_{segment}` | Daily segment completion trophies (`morning` / `evening`) |
+| `users/{userId}/stats` | `main` | Star totals for rewards UI (`totalStars`, timestamps) |
+| `users/{userId}/awards` | `{date}_{routineId}_{segment}[_stepIndex]` | Idempotent star-award events |
 | `audio_cache` | `{name}_{activityKey}_{avatarId}_{tone}_{voice}` | TTS asset registry; `status` field gates downloads |
 | `early_access` | SHA-256 hash of email | Website lead capture; deduped by hash |

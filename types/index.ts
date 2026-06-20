@@ -8,7 +8,7 @@ export type ActivityKey =
   | 'put_shoes_on'
   | 'drink_water'
   | 'tidy_room'
-  | 'use_toilet'
+  | 'take_shower'
   | 'read_book'
   | 'put_on_pajamas';
 
@@ -91,6 +91,7 @@ export interface Routine {
   avatarId: string;
   scheduledTime: string; // "HH:MM" 24h format
   activityStack: ActivityStep[];
+  stepIds?: string[];
   stepTimes?: string[];
   tone?: ToneOption;
   voice?: VoiceOption;
@@ -115,12 +116,12 @@ export interface ChildProfile {
 
 /** Daily task completion state — stored in AsyncStorage only, never synced to Firestore */
 export interface LocalDailyCompletion {
-  date: string;      // 'YYYY-MM-DD' — used to detect day rollover
-  morning: number[]; // completed step indexes
-  evening: number[];
+  date: string;       // 'YYYY-MM-DD' — used to detect day rollover
+  morning: string[];  // completed step IDs
+  evening: string[];
 }
 
-/** Written once to Firestore `daily_trophies` when a full segment completes */
+/** Written once to Firestore `users/{userId}/trophies` when a full segment completes */
 export interface DailyTrophy {
   userId: string;
   date: string;               // 'YYYY-MM-DD'
@@ -157,7 +158,11 @@ export function normalizeActivityStack(
     return (stack as ActivityKey[]).map((key) => [key]);
   }
 
-  return (stack as ActivityStep[]).filter((step) => Array.isArray(step) && step.length > 0);
+  // Product rule: never keep multi-activity steps. Flatten stacked steps
+  // into one activity per step while preserving order.
+  return (stack as ActivityStep[])
+    .filter((step) => Array.isArray(step) && step.length > 0)
+    .flatMap((step) => step.map((key) => [key] as ActivityStep));
 }
 
 export function normalizeStepTimes(

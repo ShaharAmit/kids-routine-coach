@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import { Animated, Easing, Image, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { colors, s, vs } from '../theme';
 
 const STAR = require('../assets/images/star.png');
 
@@ -82,15 +83,15 @@ export default function StarsBackground({ children }: { children?: React.ReactNo
   const stars = useMemo<StarConfig[]>(
     () => [
       
-      { top: 30, size: 70, duration: 48000, delay: 0, opacity: 0.95, twinkleDuration: 1600 },
-      { top: 70, size: 60, duration: 48000, delay: 5000, opacity: 0.7, twinkleDuration: 2200 },
-      { top: 40, size: 65, duration: 48000, delay: 10000, opacity: 0.85, twinkleDuration: 1900 },
-      { top: 100, size: 60, duration: 48000, delay: 15000, opacity: 0.6, twinkleDuration: 2600 },
-      { top: 55, size: 65, duration: 48000, delay: 20000, opacity: 0.8, twinkleDuration: 2000 },
-      { top: 80, size: 70, duration: 48000, delay: 25000, opacity: 0.65, twinkleDuration: 2400 },
-      { top: 30, size: 70, duration: 48000, delay: 30000, opacity: 0.95, twinkleDuration: 2400 },
-      { top: 70, size: 65, duration: 48000, delay: 35000, opacity: 0.8, twinkleDuration: 1900 },
-      { top: 110, size: 60, duration: 48000, delay: 40000, opacity: 0.65, twinkleDuration: 2200 },
+      { top: vs(30), size: s(70), duration: 48000, delay: 0, opacity: 0.95, twinkleDuration: 1600 },
+      { top: vs(70), size: s(60), duration: 48000, delay: 5000, opacity: 0.7, twinkleDuration: 2200 },
+      { top: vs(40), size: s(65), duration: 48000, delay: 10000, opacity: 0.85, twinkleDuration: 1900 },
+      { top: vs(100), size: s(60), duration: 48000, delay: 15000, opacity: 0.6, twinkleDuration: 2600 },
+      { top: vs(55), size: s(65), duration: 48000, delay: 20000, opacity: 0.8, twinkleDuration: 2000 },
+      { top: vs(80), size: s(70), duration: 48000, delay: 25000, opacity: 0.65, twinkleDuration: 2400 },
+      { top: vs(30), size: s(70), duration: 48000, delay: 30000, opacity: 0.95, twinkleDuration: 2400 },
+      { top: vs(70), size: s(65), duration: 48000, delay: 35000, opacity: 0.8, twinkleDuration: 1900 },
+      { top: vs(110), size: s(60), duration: 48000, delay: 40000, opacity: 0.65, twinkleDuration: 2200 },
     ],
     []
   );
@@ -108,7 +109,7 @@ export default function StarsBackground({ children }: { children?: React.ReactNo
 const styles = StyleSheet.create({
   root: {
     ...StyleSheet.absoluteFill,
-    backgroundColor: '#2e4385',
+    backgroundColor: colors.eveningBg,
     overflow: 'hidden',
   },
   star: {

@@ -7,6 +7,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { colors, fs, ms, s, vs } from '../../theme';
 
 export interface QuestionnaireStep {
   id: string;
@@ -142,88 +143,88 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   content: {
-    padding: 20,
-    paddingBottom: 40,
+    padding: ms(20),
+    paddingBottom: vs(40),
   },
   header: {
-    marginBottom: 24,
+    marginBottom: vs(24),
   },
   title: {
-    fontSize: 28,
+    fontSize: fs(28),
     fontWeight: '800',
-    color: '#1A2533',
-    marginBottom: 8,
+    color: colors.textInk,
+    marginBottom: vs(8),
   },
   stepCounter: {
-    fontSize: 14,
-    color: '#64748B',
+    fontSize: fs(14),
+    color: colors.textMuted,
     fontWeight: '600',
   },
   progressContainer: {
-    height: 6,
-    backgroundColor: '#E2E8F0',
-    borderRadius: 3,
+    height: vs(6),
+    backgroundColor: colors.border,
+    borderRadius: ms(3),
     overflow: 'hidden',
-    marginBottom: 24,
+    marginBottom: vs(24),
   },
   progressBar: {
     height: '100%',
-    backgroundColor: '#4A90D9',
-    borderRadius: 3,
+    backgroundColor: colors.primary,
+    borderRadius: ms(3),
   },
   stepContainer: {
-    backgroundColor: '#FFF',
-    borderRadius: 12,
-    padding: 20,
-    marginBottom: 24,
+    backgroundColor: colors.white,
+    borderRadius: ms(12),
+    padding: ms(20),
+    marginBottom: vs(24),
     borderWidth: 1,
-    borderColor: '#E4EAF1',
+    borderColor: colors.borderLight,
   },
   stepHeader: {
-    marginBottom: 20,
+    marginBottom: vs(20),
   },
   stepTitle: {
-    fontSize: 20,
+    fontSize: fs(20),
     fontWeight: '700',
-    color: '#1F2937',
-    marginBottom: 8,
+    color: colors.textDark,
+    marginBottom: vs(8),
   },
   stepDescription: {
-    fontSize: 14,
-    color: '#475569',
-    lineHeight: 20,
+    fontSize: fs(14),
+    color: colors.textSlate,
+    lineHeight: fs(20),
   },
   stepContent: {
-    minHeight: 100,
+    minHeight: s(100),
   },
   buttonContainer: {
     flexDirection: 'row',
-    gap: 12,
+    gap: s(12),
     justifyContent: 'space-between',
   },
   button: {
     flex: 1,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    borderRadius: 12,
+    paddingVertical: vs(14),
+    paddingHorizontal: s(16),
+    borderRadius: ms(12),
     alignItems: 'center',
     justifyContent: 'center',
   },
   primaryButton: {
-    backgroundColor: '#4A90D9',
+    backgroundColor: colors.primary,
   },
   secondaryButton: {
-    backgroundColor: '#FFF',
+    backgroundColor: colors.white,
     borderWidth: 1,
     borderColor: '#CBD5E1',
   },
   buttonText: {
-    fontSize: 16,
+    fontSize: fs(16),
     fontWeight: '700',
-    color: '#FFF',
+    color: colors.white,
   },
   secondaryButtonText: {
-    color: '#1F2937',
+    color: colors.textDark,
   },
   buttonDisabled: {
     opacity: 0.6,

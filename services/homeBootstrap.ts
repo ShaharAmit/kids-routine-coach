@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs } from 'firebase/firestore';
 import { db } from './firebase';
-import { LocalDailyCompletion, Routine, normalizeActivityStack, normalizeStepTimes } from '../types';
+import { ActivityKey, ActivityStep, ChildProfile, LocalDailyCompletion, Routine } from '../types';
 
 type HomeBootstrapSnapshot = {
   userId: string;
@@ -9,6 +9,27 @@ type HomeBootstrapSnapshot = {
   completions: Record<string, LocalDailyCompletion>;
   warmedRoutineIds: Record<string, true>;
   createdAt: number;
+};
+
+type UserRoutineProfile = {
+  childName: string;
+  childAge?: number;
+  tone?: ChildProfile['tone'];
+  voice?: ChildProfile['voice'];
+  avatarId?: string;
+};
+
+type RoutineMeta = {
+  id: string;
+  scheduledTime: string;
+  notificationId?: string;
+};
+
+type ActivityDoc = {
+  id: string;
+  activityKey: string;
+  order: number;
+  time: string;
 };
 
 let snapshot: HomeBootstrapSnapshot | null = null;
@@ -25,23 +46,80 @@ function completionStorageKey(routineId: string): string {
   return `daily_completion_${routineId}`;
 }
 
-function normalizeRoutine(raw: Record<string, unknown>, id: string): Routine {
-  const candidate = raw as Partial<Routine>;
-  const stack = normalizeActivityStack((raw.activityStack ?? []) as never);
-  const scheduledTime = candidate.scheduledTime ?? '08:00';
+function normalizeUserRoutineProfile(raw: Record<string, unknown> | null): UserRoutineProfile | null {
+  if (!raw) return null;
+  const childName = typeof raw.childName === 'string' ? raw.childName.trim() : '';
+  if (!childName) return null;
+
+  const age = typeof raw.age === 'number' ? raw.age : undefined;
+  const tone = raw.tone === 'cheerful' || raw.tone === 'encouraging' || raw.tone === 'calm'
+    ? raw.tone
+    : undefined;
+  const voice = raw.voice === 'woman' || raw.voice === 'man' ? raw.voice : undefined;
+  const avatarId = typeof raw.avatarId === 'string' && raw.avatarId.trim().length > 0
+    ? raw.avatarId
+    : undefined;
 
   return {
-    id,
-    userId: candidate.userId ?? '',
-    childName: candidate.childName ?? '',
-    childAge: candidate.childAge,
-    avatarId: candidate.avatarId ?? 'avatar_boy_01',
+    childName,
+    childAge: age,
+    tone,
+    voice,
+    avatarId,
+  };
+}
+
+function normalizeRoutineMeta(id: string, raw: Record<string, unknown>): RoutineMeta {
+  const scheduledTime = typeof raw.scheduledTime === 'string' ? raw.scheduledTime : '08:00';
+  const notificationId = typeof raw.notificationId === 'string' ? raw.notificationId : undefined;
+  return { id, scheduledTime, notificationId };
+}
+
+function normalizeActivityDocs(
+  docs: Array<{ id: string; data: Record<string, unknown> }>
+): ActivityDoc[] {
+  return docs
+    .map((entry, index) => {
+      const key = entry.data.activityKey;
+      const orderRaw = entry.data.order;
+      const timeRaw = entry.data.time;
+      if (typeof key !== 'string') return null;
+      if (typeof timeRaw !== 'string') return null;
+      return {
+        id: entry.id,
+        activityKey: key,
+        order: typeof orderRaw === 'number' ? orderRaw : index,
+        time: timeRaw,
+      };
+    })
+    .filter((item): item is ActivityDoc => Boolean(item))
+    .sort((a, b) => a.order - b.order);
+}
+
+function composeRoutine(
+  userId: string,
+  meta: RoutineMeta,
+  activities: ActivityDoc[],
+  userProfile: UserRoutineProfile | null
+): Routine {
+  const activityStack: ActivityStep[] = activities.map((item) => [item.activityKey as ActivityKey]);
+  const stepIds = activities.map((item) => item.id);
+  const stepTimes = activities.map((item) => item.time);
+  const scheduledTime = meta.scheduledTime || stepTimes[0] || '08:00';
+
+  return {
+    id: meta.id,
+    userId,
+    childName: userProfile?.childName ?? '',
+    childAge: userProfile?.childAge,
+    avatarId: userProfile?.avatarId ?? 'avatar_boy_01',
     scheduledTime,
-    activityStack: stack,
-    stepTimes: normalizeStepTimes(candidate.stepTimes, stack, scheduledTime),
-    tone: candidate.tone,
-    voice: candidate.voice,
-    notificationId: candidate.notificationId,
+    activityStack,
+    stepIds,
+    stepTimes,
+    tone: userProfile?.tone,
+    voice: userProfile?.voice,
+    notificationId: meta.notificationId,
   };
 }
 
@@ -59,9 +137,27 @@ async function readTodaysCompletion(routineId: string): Promise<LocalDailyComple
 }
 
 export async function primeHomeBootstrap(userId: string): Promise<HomeBootstrapSnapshot> {
-  const q = query(collection(db, 'routines'), where('userId', '==', userId));
-  const docs = await getDocs(q);
-  const routines = docs.docs.map((item) => normalizeRoutine(item.data() as Record<string, unknown>, item.id));
+  const userSnap = await getDoc(doc(db, 'users', userId));
+  const userProfile = userSnap.exists()
+    ? normalizeUserRoutineProfile(userSnap.data() as Record<string, unknown>)
+    : null;
+
+  const routineDocs = await getDocs(collection(db, 'users', userId, 'routines'));
+  const routines = await Promise.all(
+    routineDocs.docs.map(async (routineDoc) => {
+      const meta = normalizeRoutineMeta(routineDoc.id, routineDoc.data() as Record<string, unknown>);
+      const activityDocs = await getDocs(
+        collection(db, 'users', userId, 'routines', routineDoc.id, 'activities')
+      );
+      const activities = normalizeActivityDocs(
+        activityDocs.docs.map((activityDoc) => ({
+          id: activityDoc.id,
+          data: activityDoc.data() as Record<string, unknown>,
+        }))
+      );
+      return composeRoutine(userId, meta, activities, userProfile);
+    })
+  );
 
   const completions: Record<string, LocalDailyCompletion> = {};
   await Promise.all(

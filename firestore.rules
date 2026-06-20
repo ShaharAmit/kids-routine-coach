@@ -2,9 +2,36 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // DEV MODE: open rules — lock down with auth before going to production
-    match /routines/{routineId} {
+    // User-scoped app data
+    match /users/{userId} {
+      // DEV MODE: keep user trees open while the app flow is still evolving.
+      // Tighten to request.auth.uid == userId before production.
       allow read, write: if true;
+
+      match /routines/{routineId} {
+        allow read, write: if true;
+
+        // One doc per routine step/activity
+        match /activities/{activityId} {
+          allow read, write: if true;
+        }
+      }
+
+      // Daily trophy events — client writes when segment completes
+      match /trophies/{trophyId} {
+        allow read, write: if true;
+      }
+
+      // User stats (stars) — readable by client, written by Cloud Functions/admin SDK.
+      match /stats/{statsId} {
+        allow read: if true;
+        allow write: if false;
+      }
+
+      match /awards/{awardId} {
+        allow read: if true;
+        allow write: if false;
+      }
     }
 
     // Audio cache — open read for dev; only Cloud Functions write
@@ -24,20 +51,5 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    // Daily trophy events — client writes when segment completes
-    match /daily_trophies/{docId} {
-      allow read, write: if true; // Lock to auth.uid before prod
-    }
-
-    // User stats (stars) — readable by client, written by Cloud Functions/admin SDK.
-    match /user_stats/{userId} {
-      allow read: if true;
-      allow write: if false;
-
-      match /awards/{awardId} {
-        allow read: if true;
-        allow write: if false;
-      }
-    }
   }
 }

@@ -12,6 +12,8 @@ import { getChildProfile, hasCompletedOnboarding } from '../services/profile';
 import { Routine } from '../types';
 import { hasDebugHomeAccess } from '../services/debugFlow';
 import { getHomeBootstrapSnapshot, primeHomeBootstrap } from '../services/homeBootstrap';
+import { colors, fs, ms, s, vs } from '../theme';
+import { isMorningTime } from '../utils/timeOfDay';
 
 const HOME_PREWARM_TIMEOUT_MS = 4500;
 
@@ -75,7 +77,7 @@ export default function LoadingScreen() {
           const snapshot = getHomeBootstrapSnapshot(user.uid);
           const fallbackRoutine: Routine | null = profile
             ? {
-                id: `routine_${profile.userId}`,
+                id: isMorningTime(profile.scheduledTime) ? 'morning' : 'evening',
                 userId: profile.userId,
                 childName: profile.childName,
                 childAge: profile.age,
@@ -156,34 +158,34 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 28,
+    paddingHorizontal: s(28),
     backgroundColor: '#F5F7FA',
   },
   title: {
-    fontSize: 28,
+    fontSize: fs(28),
     fontWeight: '800',
     color: '#1E2B39',
-    marginBottom: 20,
+    marginBottom: vs(20),
   },
   stage: {
-    fontSize: 16,
+    fontSize: fs(16),
     color: '#4A5568',
-    marginBottom: 24,
+    marginBottom: vs(24),
   },
   barTrack: {
     width: '100%',
-    height: 12,
-    borderRadius: 8,
+    height: vs(12),
+    borderRadius: ms(8),
     backgroundColor: '#DFE5EC',
     overflow: 'hidden',
   },
   barFill: {
     height: '100%',
-    backgroundColor: '#4A90D9',
+    backgroundColor: colors.primary,
   },
   percent: {
-    marginTop: 12,
-    fontSize: 14,
+    marginTop: vs(12),
+    fontSize: fs(14),
     color: '#667085',
     fontWeight: '700',
   },

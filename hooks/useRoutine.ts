@@ -1,86 +1,209 @@
 import { useState, useEffect } from 'react';
-import { doc, getDoc, collection, query, where, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  getDocs,
+  onSnapshot,
+  setDoc,
+  updateDoc,
+  writeBatch,
+} from 'firebase/firestore';
 import { db } from '../services/firebase';
-import { ActivityKey, ActivityStep, Routine, normalizeActivityStack, normalizeStepTimes } from '../types';
+import { ActivityKey, ActivityStep, ChildProfile, Routine } from '../types';
 import { getHomeBootstrapSnapshot } from '../services/homeBootstrap';
+import { isMorningTime } from '../utils/timeOfDay';
 
-type FirestoreStep = {
-  activities: ActivityKey[];
+type UserRoutineProfile = {
+  childName: string;
+  childAge?: number;
+  tone?: ChildProfile['tone'];
+  voice?: ChildProfile['voice'];
+  avatarId?: string;
 };
 
-function serializeActivityStackForFirestore(stack: ActivityStep[]): FirestoreStep[] {
-  return stack.map((step) => ({ activities: [...step] }));
-}
+type RoutineMeta = {
+  id: string;
+  scheduledTime: string;
+  notificationId?: string;
+};
 
-function deserializeActivityStackFromFirestore(rawStack: unknown): ActivityStep[] {
-  if (!Array.isArray(rawStack)) return [];
+type ActivityDoc = {
+  id: string;
+  activityKey: ActivityKey;
+  order: number;
+  time: string;
+};
 
-  if (rawStack.length === 0) return [];
-  const first = rawStack[0] as unknown;
+function normalizeUserRoutineProfile(raw: Record<string, unknown> | null): UserRoutineProfile | null {
+  if (!raw) return null;
+  const childName = typeof raw.childName === 'string' ? raw.childName.trim() : '';
+  if (!childName) return null;
 
-  // Backward compatibility for local/in-memory shapes that may still be string[] or string[][].
-  if (typeof first === 'string' || Array.isArray(first)) {
-    return normalizeActivityStack(rawStack as ActivityKey[] | ActivityStep[]);
-  }
-
-  const asObjects = rawStack as Array<{ activities?: unknown }>;
-  return asObjects
-    .map((entry) => (Array.isArray(entry.activities) ? (entry.activities as ActivityKey[]) : []))
-    .filter((step) => step.length > 0);
-}
-
-function normalizeRoutine(raw: Record<string, unknown>, id: string): Routine {
-  const stack = deserializeActivityStackFromFirestore(raw.activityStack ?? []);
-  const candidate = raw as Partial<Routine>;
-  const scheduledTime = candidate.scheduledTime ?? '08:00';
+  const age = typeof raw.age === 'number' ? raw.age : undefined;
+  const tone = raw.tone === 'cheerful' || raw.tone === 'encouraging' || raw.tone === 'calm'
+    ? raw.tone
+    : undefined;
+  const voice = raw.voice === 'woman' || raw.voice === 'man' ? raw.voice : undefined;
+  const avatarId = typeof raw.avatarId === 'string' && raw.avatarId.trim().length > 0
+    ? raw.avatarId
+    : undefined;
 
   return {
-    userId: candidate.userId ?? '',
-    childName: candidate.childName ?? '',
-    childAge: candidate.childAge,
-    avatarId: candidate.avatarId ?? 'avatar_boy_01',
-    scheduledTime,
-    stepTimes: normalizeStepTimes(candidate.stepTimes, stack, scheduledTime),
-    tone: candidate.tone,
-    voice: candidate.voice,
-    notificationId: candidate.notificationId,
-    id,
-    activityStack: stack,
+    childName,
+    childAge: age,
+    tone,
+    voice,
+    avatarId,
   };
+}
+
+function normalizeRoutineMeta(id: string, raw: Record<string, unknown>): RoutineMeta {
+  const scheduledTime = typeof raw.scheduledTime === 'string' ? raw.scheduledTime : '08:00';
+  const notificationId = typeof raw.notificationId === 'string' ? raw.notificationId : undefined;
+  return { id, scheduledTime, notificationId };
+}
+
+function normalizeActivityDocs(
+  docs: Array<{ id: string; data: Record<string, unknown> }>
+): ActivityDoc[] {
+  return docs
+    .map((entry, index) => {
+      const activityKey = entry.data.activityKey;
+      const orderRaw = entry.data.order;
+      const timeRaw = entry.data.time;
+      if (typeof activityKey !== 'string') return null;
+      if (typeof timeRaw !== 'string') return null;
+
+      return {
+        id: entry.id,
+        activityKey: activityKey as ActivityKey,
+        order: typeof orderRaw === 'number' ? orderRaw : index,
+        time: timeRaw,
+      };
+    })
+    .filter((item): item is ActivityDoc => Boolean(item))
+    .sort((a, b) => a.order - b.order);
+}
+
+function composeRoutine(
+  userId: string,
+  meta: RoutineMeta,
+  activities: ActivityDoc[],
+  userProfile: UserRoutineProfile | null
+): Routine {
+  const activityStack: ActivityStep[] = activities.map((item) => [item.activityKey]);
+  const stepIds = activities.map((item) => item.id);
+  const stepTimes = activities.map((item) => item.time);
+  const scheduledTime = meta.scheduledTime || stepTimes[0] || '08:00';
+
+  return {
+    id: meta.id,
+    userId,
+    childName: userProfile?.childName ?? '',
+    childAge: userProfile?.childAge,
+    avatarId: userProfile?.avatarId ?? 'avatar_boy_01',
+    scheduledTime,
+    activityStack,
+    stepIds,
+    stepTimes,
+    tone: userProfile?.tone,
+    voice: userProfile?.voice,
+    notificationId: meta.notificationId,
+  };
+}
+
+function inferRoutineId(routine: Routine): 'morning' | 'evening' {
+  if (routine.id === 'morning' || routine.id === 'evening') {
+    return routine.id;
+  }
+  const anchorTime = routine.stepTimes?.[0] ?? routine.scheduledTime;
+  return isMorningTime(anchorTime) ? 'morning' : 'evening';
 }
 
 /**
  * Subscribe to a single routine document by ID.
  * Returns the routine and a loading flag.
  */
-export function useRoutine(routineId: string) {
+export function useRoutine(routineId: string, userId: string) {
   const [routine, setRoutine] = useState<Routine | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
   useEffect(() => {
-    if (!routineId) return;
+    if (!routineId || !userId) return;
 
-    const routineRef = doc(db, 'routines', routineId);
-    const unsubscribe = onSnapshot(
-      routineRef,
-      (snap) => {
-        if (snap.exists()) {
-          setRoutine(normalizeRoutine(snap.data() as Record<string, unknown>, snap.id));
-        } else {
-          setRoutine(null);
-        }
+    let latestUserProfile: UserRoutineProfile | null = null;
+    let latestMeta: RoutineMeta | null = null;
+    let latestActivities: ActivityDoc[] = [];
+    let userReady = false;
+    let routineReady = false;
+    let activitiesReady = false;
+
+    const emit = () => {
+      if (!userReady || !routineReady || !activitiesReady) return;
+      if (!latestMeta) {
+        setRoutine(null);
         setLoading(false);
+        return;
+      }
+      setRoutine(composeRoutine(userId, latestMeta, latestActivities, latestUserProfile));
+      setLoading(false);
+    };
+
+    const unsubscribeUser = onSnapshot(
+      doc(db, 'users', userId),
+      (snap) => {
+        latestUserProfile = snap.exists()
+          ? normalizeUserRoutineProfile(snap.data() as Record<string, unknown>)
+          : null;
+        userReady = true;
+        emit();
       },
       (err) => {
-        console.error('[useRoutine] Firestore error:', err);
         setError(err);
         setLoading(false);
       }
     );
 
-    return unsubscribe;
-  }, [routineId]);
+    const routineRef = doc(db, 'users', userId, 'routines', routineId);
+    const unsubscribeRoutine = onSnapshot(
+      routineRef,
+      (snap) => {
+        latestMeta = snap.exists()
+          ? normalizeRoutineMeta(snap.id, snap.data() as Record<string, unknown>)
+          : null;
+        routineReady = true;
+        emit();
+      },
+      (err) => {
+        setError(err);
+        setLoading(false);
+      }
+    );
+
+    const unsubscribeActivities = onSnapshot(
+      collection(db, 'users', userId, 'routines', routineId, 'activities'),
+      (snap) => {
+        latestActivities = normalizeActivityDocs(
+          snap.docs.map((d) => ({ id: d.id, data: d.data() as Record<string, unknown> }))
+        );
+        activitiesReady = true;
+        emit();
+      },
+      (err) => {
+        setError(err);
+        setLoading(false);
+      }
+    );
+
+    return () => {
+      unsubscribeUser();
+      unsubscribeRoutine();
+      unsubscribeActivities();
+    };
+  }, [routineId, userId]);
 
   return { routine, loading, error };
 }
@@ -108,49 +231,174 @@ export function useUserRoutines(userId: string) {
       setLoading(true);
     }
 
-    const q = query(collection(db, 'routines'), where('userId', '==', userId));
-    const unsubscribe = onSnapshot(
-      q,
+    let latestUserProfile: UserRoutineProfile | null = null;
+    const metaById = new Map<string, RoutineMeta>();
+    const activitiesById = new Map<string, ActivityDoc[]>();
+    const activityUnsubs = new Map<string, () => void>();
+    let routinesReady = false;
+    let userReady = false;
+
+    const emit = () => {
+      if (!routinesReady || !userReady) return;
+      const data = Array.from(metaById.values())
+        .map((meta) =>
+          composeRoutine(userId, meta, activitiesById.get(meta.id) ?? [], latestUserProfile)
+        )
+        .sort((a, b) => a.id.localeCompare(b.id));
+      setRoutines(data);
+      setLoading(false);
+    };
+
+    const unsubscribeUser = onSnapshot(
+      doc(db, 'users', userId),
       (snap) => {
-        const data = snap.docs.map((d) =>
-          normalizeRoutine(d.data() as Record<string, unknown>, d.id)
-        );
-        setRoutines(data);
-        setLoading(false);
+        latestUserProfile = snap.exists()
+          ? normalizeUserRoutineProfile(snap.data() as Record<string, unknown>)
+          : null;
+        userReady = true;
+        emit();
       },
       (err) => {
-        console.error('[useUserRoutines] Firestore error:', err);
         setError(err);
         setLoading(false);
       }
     );
 
-    return unsubscribe;
+    const unsubscribeRoutines = onSnapshot(
+      collection(db, 'users', userId, 'routines'),
+      (snap) => {
+        const nextIds = new Set<string>();
+
+        snap.docs.forEach((d) => {
+          nextIds.add(d.id);
+          metaById.set(d.id, normalizeRoutineMeta(d.id, d.data() as Record<string, unknown>));
+
+          if (!activityUnsubs.has(d.id)) {
+            const unsub = onSnapshot(
+              collection(db, 'users', userId, 'routines', d.id, 'activities'),
+              (activitySnap) => {
+                activitiesById.set(
+                  d.id,
+                  normalizeActivityDocs(
+                    activitySnap.docs.map((a) => ({ id: a.id, data: a.data() as Record<string, unknown> }))
+                  )
+                );
+                emit();
+              },
+              (err) => {
+                setError(err);
+                setLoading(false);
+              }
+            );
+            activityUnsubs.set(d.id, unsub);
+          }
+        });
+
+        Array.from(metaById.keys()).forEach((id) => {
+          if (nextIds.has(id)) return;
+          metaById.delete(id);
+          activitiesById.delete(id);
+          const unsub = activityUnsubs.get(id);
+          if (unsub) {
+            unsub();
+            activityUnsubs.delete(id);
+          }
+        });
+
+        routinesReady = true;
+        emit();
+      },
+      (err) => {
+        setError(err);
+        setLoading(false);
+      }
+    );
+
+    return () => {
+      unsubscribeUser();
+      unsubscribeRoutines();
+      Array.from(activityUnsubs.values()).forEach((unsub) => unsub());
+    };
   }, [userId]);
 
   return { routines, loading, error };
 }
 
 /**
- * Save or update a routine in Firestore.
+ * Save or update a routine in Firestore under fixed IDs: morning/evening.
+ * Activities are stored as one document per step in `activities`.
  */
 export async function saveRoutine(routine: Routine): Promise<void> {
-  const { id, ...data } = routine;
-  const routineRef = doc(db, 'routines', id);
-  const firestoreData = {
-    ...data,
-    activityStack: serializeActivityStackForFirestore(routine.activityStack),
+  if (!routine.userId) {
+    throw new Error('Cannot save routine without userId.');
+  }
+
+  const routineId = inferRoutineId(routine);
+  const routineRef = doc(db, 'users', routine.userId, 'routines', routineId);
+  const activitiesRef = collection(db, 'users', routine.userId, 'routines', routineId, 'activities');
+  const existingActivities = await getDocs(activitiesRef);
+
+  const batch = writeBatch(db);
+  existingActivities.docs.forEach((activityDoc) => {
+    batch.delete(activityDoc.ref);
+  });
+
+  const stepTimes = routine.stepTimes ?? [];
+  const stepIds = routine.stepIds ?? [];
+  routine.activityStack.forEach((step, index) => {
+    const activityKey = step[0];
+    if (!activityKey) return;
+    const stepId = typeof stepIds[index] === 'string' && stepIds[index].length > 0
+      ? stepIds[index]
+      : `step_${index}`;
+    const activityRef = doc(db, 'users', routine.userId, 'routines', routineId, 'activities', stepId);
+    batch.set(activityRef, {
+      activityKey,
+      order: index,
+      time: stepTimes[index] ?? routine.scheduledTime,
+      updatedAt: Date.now(),
+    });
+  });
+
+  await batch.commit();
+
+  const meta: Record<string, unknown> = {
+    scheduledTime: stepTimes[0] ?? routine.scheduledTime,
+    updatedAt: Date.now(),
   };
-  await setDoc(routineRef, firestoreData, { merge: true });
+  if (typeof routine.notificationId === 'string' && routine.notificationId.length > 0) {
+    meta.notificationId = routine.notificationId;
+  }
+  await setDoc(routineRef, meta, { merge: true });
+}
+
+export async function saveRoutineIfMissing(routine: Routine): Promise<boolean> {
+  if (!routine.userId) {
+    throw new Error('Cannot save routine without userId.');
+  }
+  const routineId = inferRoutineId(routine);
+  const routineRef = doc(db, 'users', routine.userId, 'routines', routineId);
+  const existing = await getDoc(routineRef);
+  if (existing.exists()) return false;
+
+  await saveRoutine({ ...routine, id: routineId });
+  return true;
 }
 
 /**
  * Update only the notificationId field on an existing routine.
  */
 export async function updateNotificationId(
+  userId: string,
   routineId: string,
   notificationId: string
 ): Promise<void> {
-  const routineRef = doc(db, 'routines', routineId);
-  await updateDoc(routineRef, { notificationId });
+  await updateDoc(doc(db, 'users', userId, 'routines', routineId), { notificationId });
+}
+
+export async function deleteRoutine(userId: string, routineId: string): Promise<void> {
+  const activitiesRef = collection(db, 'users', userId, 'routines', routineId, 'activities');
+  const activityDocs = await getDocs(activitiesRef);
+  await Promise.all(activityDocs.docs.map((d) => deleteDoc(d.ref)));
+  await deleteDoc(doc(db, 'users', userId, 'routines', routineId));
 }

@@ -9,7 +9,7 @@ export function useDailyProgress(
   routineId: string,
   refreshSignal?: string | number
 ): DailyProgress {
-  const { routine } = useRoutine(routineId);
+  const { routine } = useRoutine(routineId, userId);
   const completion = useLocalDailyCompletion(userId, routineId, undefined, undefined, refreshSignal);
 
   return useMemo(() => {
@@ -33,12 +33,14 @@ export function useDailyProgress(
 
       if (isMorning) {
         morningTotal += 1;
-        if (completion.completedMorningIndexes.has(stepIndex)) {
+        const stepId = routine.stepIds?.[stepIndex] ?? `step_${stepIndex}`;
+        if (completion.completedMorningStepIds.has(stepId)) {
           morningCompleted += 1;
         }
       } else {
         eveningTotal += 1;
-        if (completion.completedEveningIndexes.has(stepIndex)) {
+        const stepId = routine.stepIds?.[stepIndex] ?? `step_${stepIndex}`;
+        if (completion.completedEveningStepIds.has(stepId)) {
           eveningCompleted += 1;
         }
       }

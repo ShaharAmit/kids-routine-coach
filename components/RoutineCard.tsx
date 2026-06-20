@@ -2,6 +2,7 @@ import React from 'react';
 import { StyleSheet, View, Text, TouchableOpacity } from 'react-native';
 import { Routine } from '../types';
 import { ACTIVITIES } from '../constants/activities';
+import { colors, fs, ms, s, vs } from '../theme';
 
 interface RoutineCardProps {
   routine: Routine;
@@ -46,44 +47,44 @@ export default function RoutineCard({ routine }: RoutineCardProps) {
 const styles = StyleSheet.create({
   card: {
     backgroundColor: '#FFF',
-    borderRadius: 16,
-    padding: 18,
-    marginHorizontal: 16,
-    marginVertical: 8,
+    borderRadius: ms(16),
+    padding: ms(18),
+    marginHorizontal: s(16),
+    marginVertical: vs(8),
     elevation: 3,
     shadowColor: '#000',
     shadowOpacity: 0.08,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: ms(8),
+    shadowOffset: { width: s(0), height: vs(2) },
   },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: vs(8),
   },
   childName: {
-    fontSize: 20,
+    fontSize: fs(20),
     fontWeight: '700',
     color: '#222',
   },
   time: {
-    fontSize: 14,
-    color: '#4A90D9',
+    fontSize: fs(14),
+    color: colors.primary,
     fontWeight: '600',
   },
   timeSub: {
-    fontSize: 12,
-    color: '#64748B',
-    marginBottom: 4,
+    fontSize: fs(12),
+    color: colors.textMuted,
+    marginBottom: vs(4),
   },
   activities: {
-    fontSize: 22,
-    marginBottom: 8,
+    fontSize: fs(22),
+    marginBottom: vs(8),
     letterSpacing: 4,
   },
   stepCount: {
-    fontSize: 13,
+    fontSize: fs(13),
     color: '#888',
   },
 });

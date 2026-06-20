@@ -5,15 +5,16 @@ import * as Notifications from 'expo-notifications';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { clearDebugHomeAccess, hasDebugHomeAccess } from '../services/debugFlow';
-import { getCurrentSegment, segmentToTitle, segmentToSubtitle, type DaySegment } from '../utils/timeOfDay';
+import { getCurrentSegment, segmentToTitle, segmentToSubtitle, type DaySegment, segmentToTitleColor, segmentToSubtitleColor } from '../utils/timeOfDay';
+import { colors, fs, ms, s, vs } from '../theme';
 
 function HeaderTitle({ segment }: { segment: DaySegment }) {
   return (
     <View>
-      <Text style={{ fontWeight: '700', fontSize: 18, color: '#FFF' }}>
+      <Text style={{ fontWeight: '700', fontSize: fs(18), color: segmentToTitleColor(segment) }}>
         {segmentToTitle(segment)}
       </Text>
-      <Text style={{ fontSize: 12, color: '#E8F0F7', marginTop: 2, textAlign: 'center' }}>
+      <Text style={{ fontSize: fs(12), color: segmentToSubtitleColor(segment), marginTop: vs(2), textAlign: 'center' }}>
         {segmentToSubtitle(segment)}
       </Text>
     </View>
@@ -28,7 +29,7 @@ function TabLabel({ text, color }: { text: string; color: string }) {
       minimumFontScale={0.8}
       style={{
         color,
-        fontSize: 12,
+        fontSize: fs(12),
         fontWeight: '700',
         textAlign: 'center',
         width: '100%',
@@ -130,17 +131,17 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       {/* Moon/Sun decoration - positioned between header and content - only on routines tab */}
       {pathname === '/' && showDecorations && (
-        <View style={{ position: 'absolute', right: 16, top: 80, zIndex: 50, pointerEvents: 'none' }}>
+        <View style={{ position: 'absolute', right: s(16), top: vs(80), zIndex: 50, pointerEvents: 'none' }}>
           {segment === 'evening' ? (
             <Image
               source={require('../assets/images/moon.png')}
-              style={{ width: 90, height: 90 }}
+              style={{ width: s(90), height: s(90) }}
               resizeMode="contain"
             />
           ) : (
             <Image
               source={require('../assets/images/sun.png')}
-              style={{ width: 90, height: 90 }}
+              style={{ width: s(90), height: s(90) }}
               resizeMode="contain"
             />
           )}
@@ -151,9 +152,9 @@ export default function RootLayout() {
         <Stack
           initialRouteName="loading"
           screenOptions={{
-            headerStyle: { backgroundColor: '#4A90D9' },
+            headerStyle: { backgroundColor: colors.primary },
             headerTintColor: '#FFF',
-            headerTitleStyle: { fontWeight: '700', fontSize: 18 },
+            headerTitleStyle: { fontWeight: '700', fontSize: fs(18) },
           }}
         >
           <Stack.Screen name="loading" options={{ title: 'Loading', headerShown: false }} />
@@ -162,33 +163,33 @@ export default function RootLayout() {
       ) : (
         <Tabs
           screenOptions={{
-            headerStyle: { backgroundColor: '#4A90D9' },
+            headerStyle: { backgroundColor: colors.primary },
             headerTintColor: '#FFF',
-            headerTitleStyle: { fontWeight: '700', fontSize: 18 },
+            headerTitleStyle: { fontWeight: '700', fontSize: fs(18) },
             tabBarStyle: {
               position: 'absolute',
               marginHorizontal: tabBarHorizontalInset,
-              bottom: 34,
-              height: 66,
-              borderRadius: 20,
+              bottom: vs(34),
+              height: vs(66),
+              borderRadius: ms(20),
               backgroundColor: '#FFFFFF',
               borderTopWidth: 0,
               shadowColor: '#000',
-              shadowOffset: { width: 0, height: 6 },
+              shadowOffset: { width: 0, height: vs(6) },
               shadowOpacity: 0.12,
-              shadowRadius: 10,
+              shadowRadius: ms(10),
               elevation: 10,
             },
             tabBarShowLabel: true,
             tabBarLabelPosition: 'below-icon',
-            tabBarItemStyle: { flex: 1, paddingVertical: 6, justifyContent: 'center' },
+            tabBarItemStyle: { flex: 1, paddingVertical: vs(6), justifyContent: 'center' },
             tabBarLabelStyle: {
-              fontSize: 12,
+              fontSize: fs(12),
               fontWeight: '700',
               textAlign: 'center',
             },
-            tabBarIconStyle: { marginBottom: 2 },
-            tabBarActiveTintColor: '#4A90D9',
+            tabBarIconStyle: { marginBottom: vs(2) },
+            tabBarActiveTintColor: colors.primary,
             tabBarInactiveTintColor: '#CBD5E1',
           }}
         >
@@ -226,7 +227,6 @@ export default function RootLayout() {
           <Tabs.Screen name="loading" options={{ href: null }} />
           <Tabs.Screen name="onboarding" options={{ href: null }} />
           <Tabs.Screen name="parent/create" options={{ href: null }} />
-          <Tabs.Screen name="routine/[id]" options={{ href: null }} />
         </Tabs>
       )}
     </GestureHandlerRootView>

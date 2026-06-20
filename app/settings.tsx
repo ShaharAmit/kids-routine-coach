@@ -17,6 +17,8 @@ import {
 } from '../services/assetCacheService';
 import { Routine } from '../types';
 import { clearDebugHomeAccess } from '../services/debugFlow';
+import { colors, fs, ms, vs } from '../theme';
+import { isMorningTime } from '../utils/timeOfDay';
 
 export default function SettingsScreen() {
   const [profileName, setProfileName] = useState('');
@@ -80,7 +82,7 @@ export default function SettingsScreen() {
     }
 
     const routine: Routine = {
-      id: `routine_${profile.userId}`,
+      id: isMorningTime(profile.scheduledTime) ? 'morning' : 'evening',
       userId: profile.userId,
       childName: profile.childName,
       childAge: profile.age,
@@ -203,78 +205,78 @@ const styles = StyleSheet.create({
     backgroundColor: '#F5F7FA',
   },
   content: {
-    padding: 18,
-    paddingBottom: 130,
+    padding: ms(18),
+    paddingBottom: vs(130),
   },
   title: {
-    fontSize: 28,
+    fontSize: fs(28),
     fontWeight: '800',
-    color: '#1A2533',
-    marginBottom: 14,
+    color: colors.textInk,
+    marginBottom: vs(14),
   },
   card: {
-    backgroundColor: '#FFF',
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 12,
+    backgroundColor: colors.white,
+    borderRadius: ms(14),
+    padding: ms(14),
+    marginBottom: vs(12),
     borderWidth: 1,
-    borderColor: '#E4EAF1',
+    borderColor: colors.borderLight,
   },
   cardLabel: {
-    fontSize: 13,
-    color: '#64748B',
+    fontSize: fs(13),
+    color: colors.textMuted,
     fontWeight: '700',
-    marginBottom: 8,
+    marginBottom: vs(8),
   },
   profileName: {
-    fontSize: 20,
-    color: '#1F2937',
+    fontSize: fs(20),
+    color: colors.textDark,
     fontWeight: '800',
-    marginBottom: 6,
+    marginBottom: vs(6),
   },
   profileSummary: {
-    fontSize: 14,
-    color: '#475569',
-    lineHeight: 20,
+    fontSize: fs(14),
+    color: colors.textSlate,
+    lineHeight: fs(20),
   },
   primaryBtn: {
-    backgroundColor: '#4A90D9',
-    borderRadius: 12,
-    paddingVertical: 14,
+    backgroundColor: colors.primary,
+    borderRadius: ms(12),
+    paddingVertical: vs(14),
     alignItems: 'center',
-    marginTop: 8,
+    marginTop: vs(8),
   },
   primaryBtnText: {
-    color: '#FFF',
-    fontSize: 16,
+    color: colors.white,
+    fontSize: fs(16),
     fontWeight: '800',
   },
   secondaryBtn: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
+    backgroundColor: colors.white,
+    borderRadius: ms(12),
     borderWidth: 1,
     borderColor: '#CBD5E1',
-    paddingVertical: 14,
+    paddingVertical: vs(14),
     alignItems: 'center',
-    marginTop: 10,
+    marginTop: vs(10),
   },
   secondaryBtnText: {
-    color: '#1F2937',
-    fontSize: 16,
+    color: colors.textDark,
+    fontSize: fs(16),
     fontWeight: '700',
   },
   dangerBtn: {
     backgroundColor: '#FFE9E9',
-    borderRadius: 12,
+    borderRadius: ms(12),
     borderWidth: 1,
     borderColor: '#FECACA',
-    paddingVertical: 14,
+    paddingVertical: vs(14),
     alignItems: 'center',
-    marginTop: 10,
+    marginTop: vs(10),
   },
   dangerBtnText: {
-    color: '#B91C1C',
-    fontSize: 16,
+    color: colors.dangerStrong,
+    fontSize: fs(16),
     fontWeight: '800',
   },
 });

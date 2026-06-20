@@ -1,7 +1,18 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ChildProfile, normalizeActivityStack, normalizeStepTimes } from '../types';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { db } from './firebase';
 
 const PROFILE_KEY = 'child_profile_v1';
+
+type UserProfileDoc = {
+  childName: string;
+  age: number;
+  voice: ChildProfile['voice'];
+  tone: ChildProfile['tone'];
+  avatarId: string;
+  updatedAt: number;
+};
 
 function isValidGender(value: unknown): value is ChildProfile['gender'] {
   return value === 'boy' || value === 'girl';
@@ -30,6 +41,43 @@ export async function saveChildProfile(profile: ChildProfile): Promise<void> {
     totalStarsEarned: profile.totalStarsEarned ?? 0,
   };
   await AsyncStorage.setItem(PROFILE_KEY, JSON.stringify(normalized));
+}
+
+export async function saveUserProfileDoc(profile: ChildProfile): Promise<void> {
+  const payload: UserProfileDoc = {
+    childName: profile.childName.trim(),
+    age: profile.age,
+    voice: profile.voice,
+    tone: profile.tone,
+    avatarId: profile.avatarId,
+    updatedAt: Date.now(),
+  };
+  await setDoc(doc(db, 'users', profile.userId), payload, { merge: true });
+}
+
+export async function getUserProfileDoc(userId: string): Promise<UserProfileDoc | null> {
+  if (!userId) return null;
+  const snap = await getDoc(doc(db, 'users', userId));
+  if (!snap.exists()) return null;
+  const data = snap.data() as Partial<UserProfileDoc>;
+  if (
+    typeof data.childName !== 'string' ||
+    typeof data.age !== 'number' ||
+    !isValidVoice(data.voice) ||
+    !isValidTone(data.tone) ||
+    typeof data.avatarId !== 'string'
+  ) {
+    return null;
+  }
+
+  return {
+    childName: data.childName.trim(),
+    age: data.age,
+    voice: data.voice,
+    tone: data.tone,
+    avatarId: data.avatarId,
+    updatedAt: typeof data.updatedAt === 'number' ? data.updatedAt : Date.now(),
+  };
 }
 
 export async function getChildProfile(): Promise<ChildProfile | null> {

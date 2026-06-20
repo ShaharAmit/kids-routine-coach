@@ -9,15 +9,21 @@ import {
   Alert,
   ActivityIndicator,
 } from 'react-native';
-import { router } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { collection, doc, getDoc, getDocs } from 'firebase/firestore';
 import { saveRoutine } from '../../hooks/useRoutine';
 import { scheduleRoutineNotification } from '../../services/notifications';
 import { syncRoutineAssets } from '../../services/assetSync';
 import { ensureAudioForRoutine } from '../../services/tts';
-import { Routine, ActivityKey, ToneOption, VoiceOption } from '../../types';
+import { ChildProfile, Routine, ActivityKey, ToneOption, VoiceOption } from '../../types';
 import { ACTIVITIES, ACTIVITY_KEYS } from '../../constants/activities';
-import { ensureAuth } from '../../services/firebase';
-import { getChildProfile } from '../../services/profile';
+import { db, ensureAuth } from '../../services/firebase';
+import { getChildProfile, saveUserProfileDoc } from '../../services/profile';
+import { colors, fs, ms, s, vs } from '../../theme';
+import { getCurrentSegment, isMorningTime } from '../../utils/timeOfDay';
+import { getTodayISO } from '../../utils/date';
 
 function addMinutes(time: string, minutesToAdd: number): string {
   const [hourStr, minuteStr] = time.split(':');
@@ -29,7 +35,74 @@ function addMinutes(time: string, minutesToAdd: number): string {
   return `${h}:${m}`;
 }
 
+type ActivityEntry = { id: string; key: ActivityKey; time: string; order: number };
+
+async function readExistingActivityEntries(
+  userId: string,
+  routineId: string
+): Promise<ActivityEntry[]> {
+  const docs = await getDocs(collection(db, 'users', userId, 'routines', routineId, 'activities'));
+  return docs.docs
+    .map((d, index) => {
+      const data = d.data() as Record<string, unknown>;
+      const key = data.activityKey;
+      const time = data.time;
+      const order = data.order;
+      if (typeof key !== 'string' || typeof time !== 'string') return null;
+      return {
+        id: d.id,
+        key: key as ActivityKey,
+        time,
+        order: typeof order === 'number' ? order : index,
+      };
+    })
+    .filter((item): item is ActivityEntry => Boolean(item))
+    .sort((a, b) => a.order - b.order);
+}
+
+async function remapLocalDailyCompletionForUpdatedActivities(
+  routineId: string,
+  previous: ActivityEntry[],
+  next: ActivityEntry[]
+): Promise<void> {
+  const storageKey = `daily_completion_${routineId}`;
+  const raw = await AsyncStorage.getItem(storageKey);
+  if (!raw) return;
+
+  let parsed: { date?: string; morning?: string[]; evening?: string[] } | null = null;
+  try {
+    parsed = JSON.parse(raw) as { date?: string; morning?: string[]; evening?: string[] };
+  } catch {
+    return;
+  }
+  if (!parsed || parsed.date !== getTodayISO()) return;
+
+  const previousMorning = Array.isArray(parsed.morning) ? parsed.morning : [];
+  const previousEvening = Array.isArray(parsed.evening) ? parsed.evening : [];
+
+  const remapForSegment = (segment: 'morning' | 'evening', completedIds: string[]): string[] => {
+    const validStepIds = new Set(
+      next
+        .filter((entry) => (isMorningTime(entry.time) ? 'morning' : 'evening') === segment)
+        .map((entry) => entry.id)
+    );
+    return completedIds.filter((id) => validStepIds.has(id));
+  };
+
+  const updated = {
+    date: parsed.date,
+    morning: remapForSegment('morning', previousMorning),
+    evening: remapForSegment('evening', previousEvening),
+  };
+  await AsyncStorage.setItem(storageKey, JSON.stringify(updated));
+}
+
 export default function CreateRoutineScreen() {
+  const insets = useSafeAreaInsets();
+  const { segment } = useLocalSearchParams<{ segment?: string }>();
+  const forcedSegment =
+    segment === 'morning' || segment === 'evening' ? segment : null;
+  const targetSegment = forcedSegment ?? getCurrentSegment();
   const [childName, setChildName] = useState('');
   const [childAge, setChildAge] = useState<number | undefined>(undefined);
   const [childProfileLoaded, setChildProfileLoaded] = useState(false);
@@ -48,6 +121,7 @@ export default function CreateRoutineScreen() {
     let mounted = true;
 
     async function loadSingleChildProfile() {
+      const user = await ensureAuth();
       const profile = await getChildProfile();
       if (!mounted) return;
 
@@ -63,7 +137,42 @@ export default function CreateRoutineScreen() {
       setAvatarId(profile.avatarId);
       setVoice(profile.voice);
       setTone(profile.tone);
-      setScheduledTime(profile.scheduledTime);
+      if (targetSegment === 'evening') {
+        setScheduledTime('19:00');
+      } else {
+        setScheduledTime('08:00');
+      }
+
+      const routineRef = doc(db, 'users', user.uid, 'routines', targetSegment);
+      const routineSnap = await getDoc(routineRef);
+      if (routineSnap.exists()) {
+        const routineData = routineSnap.data() as Record<string, unknown>;
+        if (typeof routineData.scheduledTime === 'string') {
+          setScheduledTime(routineData.scheduledTime);
+        }
+
+        const activityDocs = await getDocs(
+          collection(db, 'users', user.uid, 'routines', targetSegment, 'activities')
+        );
+        const sortedActivities = activityDocs.docs
+          .map((d, index) => {
+            const data = d.data() as Record<string, unknown>;
+            const key = data.activityKey;
+            const order = data.order;
+            if (typeof key !== 'string') return null;
+            return {
+              key: key as ActivityKey,
+              order: typeof order === 'number' ? order : index,
+            };
+          })
+          .filter((entry): entry is { key: ActivityKey; order: number } => Boolean(entry))
+          .sort((a, b) => a.order - b.order)
+          .map((entry) => entry.key);
+
+        if (sortedActivities.length > 0) {
+          setSelectedActivities(sortedActivities);
+        }
+      }
       setChildProfileLoaded(true);
     }
 
@@ -77,7 +186,7 @@ export default function CreateRoutineScreen() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [targetSegment]);
 
   const toggleActivity = useCallback((key: ActivityKey) => {
     setSelectedActivities((prev) =>
@@ -118,20 +227,73 @@ export default function CreateRoutineScreen() {
 
     try {
       const user = await ensureAuth();
-      const routineId = `${childName.toLowerCase().replace(/\s+/g, '_')}_routine_${Date.now()}`;
+      const trimmedChildName = childName.trim();
+      const routineId = targetSegment;
+      const previousActivityEntries = await readExistingActivityEntries(user.uid, routineId);
+      const nextStepTimes = selectedActivities.map((_, index) => addMinutes(scheduledTime, index * 15));
+      const keyToIds = new Map<ActivityKey, string[]>();
+      previousActivityEntries.forEach((entry) => {
+        const list = keyToIds.get(entry.key) ?? [];
+        list.push(entry.id);
+        keyToIds.set(entry.key, list);
+      });
+
+      const usedIds = new Set<string>();
+      const generateNewStepId = (index: number): string => {
+        let candidate = '';
+        do {
+          candidate = `step_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 8)}`;
+        } while (usedIds.has(candidate));
+        return candidate;
+      };
+
+      const nextActivityEntries: ActivityEntry[] = selectedActivities.map((key, index) => {
+        const candidateIds = keyToIds.get(key) ?? [];
+        let reusedId = candidateIds.shift();
+        while (reusedId && usedIds.has(reusedId)) {
+          reusedId = candidateIds.shift();
+        }
+        keyToIds.set(key, candidateIds);
+        const resolvedId = reusedId ?? generateNewStepId(index);
+        usedIds.add(resolvedId);
+        return {
+          id: resolvedId,
+          key,
+          time: nextStepTimes[index],
+          order: index,
+        };
+      });
 
       const routine: Routine = {
         id: routineId,
         userId: user.uid,
-        childName: childName.trim(),
+        childName: trimmedChildName,
         childAge,
         avatarId,
         scheduledTime,
         activityStack: selectedActivities.map((entry) => [entry]),
-        stepTimes: selectedActivities.map((_, index) => addMinutes(scheduledTime, index * 15)),
+        stepIds: nextActivityEntries.map((entry) => entry.id),
+        stepTimes: nextStepTimes,
         tone,
         voice,
       };
+
+      const profileForSync: ChildProfile = {
+        userId: user.uid,
+        childName: trimmedChildName,
+        age: childAge ?? 6,
+        gender: 'boy',
+        avatarId,
+        voice,
+        tone,
+        scheduledTime,
+        activityStack: selectedActivities.map((entry) => [entry]),
+        stepTimes: nextStepTimes,
+        totalStarsEarned: 0,
+        updatedAt: Date.now(),
+      };
+
+      await saveUserProfileDoc(profileForSync);
 
       // 1. Save to Firestore
       await saveRoutine(routine);
@@ -145,6 +307,14 @@ export default function CreateRoutineScreen() {
       // Update routine with notification ID
       const routineWithNotif: Routine = { ...routine, notificationId };
       await saveRoutine(routineWithNotif);
+
+      // Preserve completed activities that still exist; drop stale ones and
+      // keep any newly added activities unfinished.
+      await remapLocalDailyCompletionForUpdatedActivities(
+        routine.id,
+        previousActivityEntries,
+        nextActivityEntries
+      );
 
       // 4. Kick off background asset sync (Phase 3) — non-blocking
       syncRoutineAssets(routine).catch((err) =>
@@ -162,10 +332,23 @@ export default function CreateRoutineScreen() {
     } finally {
       setSaving(false);
     }
-  }, [avatarId, childAge, childName, childProfileLoaded, scheduledTime, selectedActivities, tone, voice]);
+  }, [
+    avatarId,
+    childAge,
+    childName,
+    childProfileLoaded,
+    targetSegment,
+    scheduledTime,
+    selectedActivities,
+    tone,
+    voice,
+  ]);
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={[styles.content, { paddingBottom: vs(170) + insets.bottom }]}
+    >
       <Text style={styles.sectionTitle}>Child</Text>
       <View style={styles.childSummaryCard}>
         <Text style={styles.childSummaryName}>{childName || 'Not configured yet'}</Text>
@@ -271,81 +454,80 @@ const styles = StyleSheet.create({
     backgroundColor: '#F5F7FA',
   },
   content: {
-    padding: 20,
-    paddingBottom: 60,
+    padding: ms(20),
   },
   sectionTitle: {
-    fontSize: 16,
+    fontSize: fs(16),
     fontWeight: '700',
     color: '#333',
-    marginTop: 20,
-    marginBottom: 8,
+    marginTop: vs(20),
+    marginBottom: vs(8),
   },
   hint: {
-    fontSize: 13,
+    fontSize: fs(13),
     color: '#888',
-    marginBottom: 10,
+    marginBottom: vs(10),
   },
   input: {
     backgroundColor: '#FFF',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    fontSize: 16,
+    borderRadius: ms(12),
+    paddingHorizontal: s(16),
+    paddingVertical: vs(12),
+    fontSize: fs(16),
     borderWidth: 1.5,
     borderColor: '#E0E0E0',
     color: '#222',
   },
   childSummaryCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
+    backgroundColor: colors.white,
+    borderRadius: ms(12),
     borderWidth: 1.5,
     borderColor: '#E0E0E0',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingHorizontal: s(16),
+    paddingVertical: vs(14),
   },
   childSummaryName: {
-    fontSize: 16,
+    fontSize: fs(16),
     fontWeight: '700',
     color: '#222',
   },
   childSummaryHint: {
-    marginTop: 4,
-    fontSize: 13,
+    marginTop: vs(4),
+    fontSize: fs(13),
     color: '#6B7280',
   },
   activityGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 10,
+    gap: s(10),
   },
   activityChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 12,
+    paddingVertical: vs(8),
+    paddingHorizontal: s(12),
+    borderRadius: ms(12),
     borderWidth: 1.5,
     borderColor: '#DDD',
     backgroundColor: '#FFF',
-    gap: 6,
+    gap: s(6),
   },
   activityEmoji: {
-    fontSize: 18,
+    fontSize: fs(18),
   },
   activityLabel: {
-    fontSize: 13,
+    fontSize: fs(13),
     fontWeight: '600',
     color: '#555',
   },
   activityOrder: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
+    width: s(20),
+    height: s(20),
+    borderRadius: ms(10),
     textAlign: 'center',
-    lineHeight: 20,
+    lineHeight: fs(20),
     color: '#FFF',
-    fontSize: 11,
+    fontSize: fs(11),
     fontWeight: '700',
     overflow: 'hidden',
   },
@@ -353,56 +535,56 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#FFF',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 8,
+    borderRadius: ms(12),
+    padding: ms(12),
+    marginBottom: vs(8),
     elevation: 1,
     shadowColor: '#000',
     shadowOpacity: 0.05,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 1 },
+    shadowRadius: ms(4),
+    shadowOffset: { width: s(0), height: vs(1) },
   },
   orderEmoji: {
-    fontSize: 22,
-    marginRight: 10,
+    fontSize: fs(22),
+    marginRight: s(10),
   },
   orderLabel: {
     flex: 1,
-    fontSize: 15,
+    fontSize: fs(15),
     fontWeight: '600',
     color: '#333',
   },
   orderButtons: {
     flexDirection: 'row',
-    gap: 4,
+    gap: s(4),
   },
   orderBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
+    width: s(32),
+    height: s(32),
+    borderRadius: ms(8),
     backgroundColor: '#F0F0F0',
     alignItems: 'center',
     justifyContent: 'center',
   },
   orderBtnText: {
-    fontSize: 14,
+    fontSize: fs(14),
     color: '#555',
   },
   saveButton: {
-    marginTop: 32,
-    backgroundColor: '#4A90D9',
-    paddingVertical: 18,
-    borderRadius: 16,
+    marginTop: vs(32),
+    backgroundColor: colors.primary,
+    paddingVertical: vs(18),
+    borderRadius: ms(16),
     alignItems: 'center',
     elevation: 4,
-    shadowColor: '#4A90D9',
+    shadowColor: colors.primary,
     shadowOpacity: 0.3,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: ms(10),
+    shadowOffset: { width: s(0), height: vs(4) },
   },
   saveButtonText: {
     color: '#FFF',
-    fontSize: 18,
+    fontSize: fs(18),
     fontWeight: '800',
   },
 });

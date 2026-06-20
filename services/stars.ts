@@ -18,14 +18,14 @@ interface AwardRoutineStepStarResponse {
 
 export async function getUserTotalStars(userId: string): Promise<number | null> {
   if (!userId) return null;
-  const statsRef = doc(db, 'user_stats', userId);
+  const statsRef = doc(db, 'users', userId, 'stats', 'main');
   const snap = await getDoc(statsRef);
   if (snap.exists()) {
     const total = snap.data()?.totalStars;
     if (typeof total === 'number') return total;
   }
 
-  const awardsRef = collection(db, 'user_stats', userId, 'awards');
+  const awardsRef = collection(db, 'users', userId, 'awards');
   const awardsSnap = await getDocs(awardsRef);
   if (awardsSnap.empty) return null;
 

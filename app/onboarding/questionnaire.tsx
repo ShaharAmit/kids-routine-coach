@@ -26,19 +26,21 @@ import {
   ToneOption,
 } from '../../types';
 import { ensureAuth } from '../../services/firebase';
-import { saveRoutine } from '../../hooks/useRoutine';
+import { saveRoutine, saveRoutineIfMissing } from '../../hooks/useRoutine';
 import { scheduleRoutineNotification } from '../../services/notifications';
-import { saveChildProfile, getChildProfile } from '../../services/profile';
+import { saveChildProfile, getChildProfile, saveUserProfileDoc } from '../../services/profile';
 import { preloadRoutineAssetsInBackground } from '../../services/assetCacheService';
 import { grantDebugHomeAccess } from '../../services/debugFlow';
+import { colors, fs, ms, s, vs } from '../../theme';
 
 const GRASS = require('../../assets/images/grass.png');
 
 const DEFAULT_AVATAR_ID = 'avatar_boy_01';
 const DEFAULT_VOICE = 'woman' as const;
 const DEFAULT_SCHEDULED_TIME = '08:00';
+const DEFAULT_EVENING_TIME = '19:00';
 
-/** A standard morning routine used as the activity baseline for the generated routine. */
+/** Default activities kept in local child profile for first-time UX only. */
 const DEFAULT_ACTIVITY_STACK = [['get_dressed'], ['brush_teeth'], ['eat_breakfast']] as const;
 const DEFAULT_STEP_TIMES = ['07:30', '07:45', '08:00'];
 
@@ -190,8 +192,8 @@ export default function QuestionnaireScreen() {
         updatedAt: Date.now(),
       };
 
-      const routine: Routine = {
-        id: `routine_${userId}`,
+      const morningRoutine: Routine = {
+        id: 'morning',
         userId,
         childName: profile.childName,
         childAge: age,
@@ -202,16 +204,32 @@ export default function QuestionnaireScreen() {
         tone,
         voice: DEFAULT_VOICE,
       };
+      const eveningRoutine: Routine = {
+        id: 'evening',
+        userId,
+        childName: profile.childName,
+        childAge: age,
+        avatarId: DEFAULT_AVATAR_ID,
+        scheduledTime: DEFAULT_EVENING_TIME,
+        activityStack: [],
+        stepTimes: [],
+        tone,
+        voice: DEFAULT_VOICE,
+      };
 
-      await saveRoutine(routine);
-      const notificationId = await scheduleRoutineNotification(routine);
-      await saveRoutine({ ...routine, notificationId });
       await saveChildProfile(profile);
+      await saveUserProfileDoc(profile);
+      const morningCreated = await saveRoutineIfMissing(morningRoutine);
+      await saveRoutineIfMissing(eveningRoutine);
+      if (morningCreated) {
+        const notificationId = await scheduleRoutineNotification(morningRoutine);
+        const routineWithNotif: Routine = { ...morningRoutine, notificationId };
+        await saveRoutine(routineWithNotif);
+        preloadRoutineAssetsInBackground(routineWithNotif).catch((err) => {
+          console.warn('[Questionnaire] background preloading failed:', err);
+        });
+      }
       grantDebugHomeAccess();
-
-      preloadRoutineAssetsInBackground(routine).catch((err) => {
-        console.warn('[Questionnaire] background preloading failed:', err);
-      });
 
       router.replace('/');
     } catch (err) {
@@ -380,7 +398,7 @@ function NameAgeStep({
         />
       </View>
 
-      <Text style={[styles.fieldLabel, { marginTop: 22 }]}>How old are they?</Text>
+      <Text style={[styles.fieldLabel, { marginTop: vs(22) }]}>How old are they?</Text>
       <View style={styles.inputRow}>
         <Text style={styles.inputIcon}>📅</Text>
         <Text style={styles.ageValue}>{age}</Text>
@@ -491,13 +509,13 @@ function FinalCard({
   );
 }
 
-const TEAL_DARK = '#1E7B7B';
+const TEAL_DARK = colors.teal;
 const TEAL = '#3FA9A0';
 
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: '#c6e8e8',
+    backgroundColor: colors.morningBg,
   },
   flex: {
     flex: 1,
@@ -509,53 +527,53 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 18,
-    paddingTop: 6,
+    paddingHorizontal: s(18),
+    paddingTop: vs(6),
   },
   backButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#FFFFFF',
+    width: s(44),
+    height: s(44),
+    borderRadius: ms(22),
+    backgroundColor: colors.white,
     alignItems: 'center',
     justifyContent: 'center',
     shadowColor: '#0B5757',
     shadowOpacity: 0.12,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: ms(6),
+    shadowOffset: { width: s(0), height: vs(2) },
     elevation: 2,
   },
   headerSpacer: {
-    width: 44,
-    height: 44,
+    width: s(44),
+    height: s(44),
   },
   backChevron: {
-    fontSize: 28,
-    lineHeight: 30,
+    fontSize: fs(28),
+    lineHeight: fs(30),
     color: TEAL_DARK,
     fontWeight: '700',
-    marginTop: -2,
+    marginTop: vs(-2),
   },
   headerTitle: {
-    fontSize: 18,
+    fontSize: fs(18),
     fontWeight: '800',
     color: TEAL_DARK,
   },
   progressWrap: {
     alignItems: 'center',
-    marginTop: 14,
-    marginBottom: 8,
+    marginTop: vs(14),
+    marginBottom: vs(8),
   },
   dotsRow: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   dot: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
+    width: s(16),
+    height: s(16),
+    borderRadius: ms(8),
     borderWidth: 2,
-    borderColor: '#FFFFFF',
+    borderColor: colors.white,
     backgroundColor: 'transparent',
   },
   dotActive: {
@@ -563,40 +581,40 @@ const styles = StyleSheet.create({
     borderColor: TEAL_DARK,
   },
   dotDone: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.white,
   },
   dotConnector: {
-    width: 26,
-    height: 2,
-    backgroundColor: '#FFFFFF',
+    width: s(26),
+    height: s(2),
+    backgroundColor: colors.white,
   },
   progressLabel: {
-    marginTop: 10,
-    fontSize: 15,
+    marginTop: vs(10),
+    fontSize: fs(15),
     fontWeight: '700',
     color: TEAL_DARK,
   },
   cardWrap: {
     flex: 1,
-    paddingHorizontal: 18,
-    paddingTop: 12,
-    paddingBottom: 12,
+    paddingHorizontal: s(18),
+    paddingTop: vs(12),
+    paddingBottom: vs(12),
   },
   card: {
     flex: 1,
     flexDirection: 'column',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 28,
+    backgroundColor: colors.white,
+    borderRadius: ms(28),
     overflow: 'hidden',
     shadowColor: '#0B5757',
     shadowOpacity: 0.1,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 8 },
+    shadowRadius: ms(16),
+    shadowOffset: { width: s(0), height: vs(8) },
     elevation: 4,
   },
   cardScroll: {
-    padding: 26,
-    paddingBottom: 190,
+    padding: ms(26),
+    paddingBottom: vs(190),
   },
   cardBody: {
     flex: 1,
@@ -608,52 +626,52 @@ const styles = StyleSheet.create({
   },
   grassScene: {
     position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: 190,
+    left: s(0),
+    right: s(0),
+    bottom: vs(0),
+    height: s(190),
     width: '100%',
     zIndex: 0,
   },
   cardTitle: {
-    fontSize: 26,
-    lineHeight: 32,
+    fontSize: fs(26),
+    lineHeight: fs(32),
     fontWeight: '800',
     color: TEAL_DARK,
-    marginBottom: 24,
+    marginBottom: vs(24),
   },
   heartIcon: {
-    fontSize: 22,
+    fontSize: fs(22),
   },
   fieldLabel: {
-    fontSize: 16,
+    fontSize: fs(16),
     fontWeight: '700',
     color: TEAL_DARK,
-    marginBottom: 10,
+    marginBottom: vs(10),
   },
   inputRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+    backgroundColor: colors.white,
+    borderRadius: ms(16),
     borderWidth: 1.5,
     borderColor: '#D6ECEC',
-    paddingHorizontal: 16,
-    height: 60,
+    paddingHorizontal: s(16),
+    height: s(60),
   },
   inputIcon: {
-    fontSize: 20,
-    marginRight: 12,
+    fontSize: fs(20),
+    marginRight: s(12),
   },
   input: {
     flex: 1,
-    fontSize: 20,
+    fontSize: fs(20),
     color: '#21413F',
     fontWeight: '600',
   },
   ageValue: {
     flex: 1,
-    fontSize: 20,
+    fontSize: fs(20),
     color: '#21413F',
     fontWeight: '700',
   },
@@ -662,63 +680,63 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1.5,
     borderColor: '#D6ECEC',
-    borderRadius: 12,
+    borderRadius: ms(12),
     overflow: 'hidden',
   },
   stepperButton: {
-    width: 46,
-    height: 40,
+    width: s(46),
+    height: s(40),
     alignItems: 'center',
     justifyContent: 'center',
   },
   stepperDivider: {
-    width: 1,
-    height: 24,
+    width: s(1),
+    height: s(24),
     backgroundColor: '#D6ECEC',
   },
   stepperText: {
-    fontSize: 24,
+    fontSize: fs(24),
     color: TEAL_DARK,
     fontWeight: '600',
   },
   helperRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    marginTop: 26,
-    gap: 8,
+    marginTop: vs(26),
+    gap: s(8),
   },
   heartIconSmall: {
-    fontSize: 16,
+    fontSize: fs(16),
   },
   helperText: {
     flex: 1,
-    fontSize: 14,
-    lineHeight: 20,
+    fontSize: fs(14),
+    lineHeight: fs(20),
     color: '#5C7A78',
     fontWeight: '500',
   },
   optionsList: {
-    gap: 12,
+    gap: s(12),
   },
   option: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+    backgroundColor: colors.white,
+    borderRadius: ms(16),
     borderWidth: 1.5,
     borderColor: '#D6ECEC',
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    gap: 14,
+    paddingHorizontal: s(16),
+    paddingVertical: vs(16),
+    gap: s(14),
   },
   optionSelected: {
     borderColor: TEAL,
     backgroundColor: '#EAF7F6',
   },
   radio: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    width: s(24),
+    height: s(24),
+    borderRadius: ms(12),
     borderWidth: 2,
     borderColor: '#C2DDDD',
     alignItems: 'center',
@@ -728,14 +746,14 @@ const styles = StyleSheet.create({
     borderColor: TEAL,
   },
   radioInner: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
+    width: s(12),
+    height: s(12),
+    borderRadius: ms(6),
     backgroundColor: TEAL,
   },
   optionLabel: {
     flex: 1,
-    fontSize: 16,
+    fontSize: fs(16),
     color: '#3C5654',
     fontWeight: '600',
   },
@@ -748,14 +766,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: TEAL,
-    borderRadius: 30,
-    height: 60,
-    marginTop: 16,
-    gap: 12,
+    borderRadius: ms(30),
+    height: s(60),
+    marginTop: vs(16),
+    gap: s(12),
     shadowColor: TEAL_DARK,
     shadowOpacity: 0.25,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: ms(10),
+    shadowOffset: { width: s(0), height: vs(4) },
     elevation: 3,
   },
   continueButtonDisabled: {
@@ -763,35 +781,35 @@ const styles = StyleSheet.create({
     shadowOpacity: 0,
   },
   continueText: {
-    color: '#FFFFFF',
-    fontSize: 19,
+    color: colors.white,
+    fontSize: fs(19),
     fontWeight: '800',
   },
   continueArrow: {
-    color: '#FFFFFF',
-    fontSize: 20,
+    color: colors.white,
+    fontSize: fs(20),
     fontWeight: '800',
   },
   finalContent: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 32,
-    paddingBottom: 190,
+    padding: ms(32),
+    paddingBottom: vs(190),
   },
   finalEmoji: {
-    fontSize: 56,
-    marginBottom: 16,
+    fontSize: fs(56),
+    marginBottom: vs(16),
   },
   finalTitle: {
-    fontSize: 30,
+    fontSize: fs(30),
     fontWeight: '800',
     color: TEAL_DARK,
-    marginBottom: 16,
+    marginBottom: vs(16),
   },
   finalBody: {
-    fontSize: 18,
-    lineHeight: 26,
+    fontSize: fs(18),
+    lineHeight: fs(26),
     color: '#3C5654',
     textAlign: 'center',
     fontWeight: '500',
@@ -801,8 +819,8 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   finalCta: {
-    marginTop: 20,
-    fontSize: 20,
+    marginTop: vs(20),
+    fontSize: fs(20),
     fontWeight: '800',
     color: TEAL,
   },

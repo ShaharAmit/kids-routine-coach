@@ -1,11 +1,19 @@
 {
   "indexes": [
     {
-      "collectionGroup": "daily_trophies",
+      "collectionGroup": "trophies",
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "userId", "order": "ASCENDING" },
         { "fieldPath": "date", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "activities",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "order", "order": "ASCENDING" },
+        { "fieldPath": "time", "order": "ASCENDING" }
       ]
     }
   ],

@@ -111,7 +111,7 @@ npx expo start
 
 ## 🗄 Firestore Schema
 
-### `routines` collection
+### `users/{userId}/routines` collection
 
 ```json
 {
@@ -122,6 +122,31 @@ npx expo start
   "scheduledTime": "08:00",
   "activityStack": ["brush_teeth", "get_dressed", "eat_breakfast"],
   "notificationId": "expo-notification-id"
+}
+```
+
+### `users/{userId}/trophies` collection
+
+Document ID: `{YYYY-MM-DD}_{segment}`
+
+```json
+{
+  "userId": "firebase_auth_uid",
+  "date": "2026-06-20",
+  "segment": "morning",
+  "routineId": "routine_firebase_auth_uid",
+  "childName": "Liam",
+  "completedAt": "Firestore Timestamp"
+}
+```
+
+### `users/{userId}/stats/main` document
+
+```json
+{
+  "userId": "firebase_auth_uid",
+  "totalStars": 12,
+  "updatedAt": "Firestore Timestamp"
 }
 ```
 
