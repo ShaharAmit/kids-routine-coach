@@ -11,7 +11,8 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { router, Stack } from 'expo-router';
+import { router } from 'expo-router';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ActivityPlayer from '../components/ActivityPlayer';
 import StarsBackground from '../components/StarsBackground';
@@ -23,6 +24,7 @@ import { subscribeAssetCacheStatus } from '../services/assetCacheService';
 import { areAssetsReady, syncRoutineAssets } from '../services/assetSync';
 import { ensureAuth } from '../services/firebase';
 import { getHomeBootstrapSnapshot, isRoutineWarmed, markRoutineWarmed } from '../services/homeBootstrap';
+import { setHomeViewMode } from '../services/homeViewState';
 import { getChildProfile, saveChildProfile } from '../services/profile';
 import { awardRoutineStepStar } from '../services/stars';
 import { ensureAudioForRoutine } from '../services/tts';
@@ -76,6 +78,7 @@ function pickPrimaryRoutine(
 const roundedFontBold = ROUNDED_FONT;
 
 export default function HomeScreen() {
+  const navigation = useNavigation();
   const [userId, setUserId] = useState('');
   const [cacheStage, setCacheStage] = useState('idle');
   const [segment, setSegment] = useState<'morning' | 'evening'>(getCurrentSegment());
@@ -182,6 +185,51 @@ export default function HomeScreen() {
     };
   }, []);
 
+  // Switching tabs (e.g. Settings -> Routines) doesn't remount this screen or trigger an
+  // AppState change, so the caption toggle above only picks up the latest saved preference
+  // when this tab regains focus.
+  useFocusEffect(
+    useCallback(() => {
+      let mounted = true;
+
+      getChildProfile()
+        .then((profile) => {
+          if (mounted) setShowCaptions(profile?.showCaptions ?? false);
+        })
+        .catch((err) => console.warn('[Home] failed to refresh caption preference on focus:', err));
+
+      return () => {
+        mounted = false;
+      };
+    }, [])
+  );
+
+  // Nested <Stack.Screen> options have no effect on a Tabs.Screen's header — this tab's header
+  // must be styled via navigation.setOptions so it matches the segment-tinted body background.
+  useEffect(() => {
+    const isEveningHeader = segment === 'evening';
+    navigation.setOptions({
+      headerStyle: { backgroundColor: isEveningHeader ? colors.eveningBg : colors.morningBg },
+      headerTintColor: isEveningHeader ? '#FFF' : '#1E7B7B',
+      headerTitleStyle: {
+        fontFamily: roundedFontBold ?? 'System',
+        fontSize: fs(17),
+        color: isEveningHeader ? '#FFF' : '#1E7B7B',
+      },
+      headerShadowVisible: false,
+    });
+  }, [navigation, segment]);
+
+  // Let the root layout know when the full-screen activity player is active so it can hide
+  // the moon/sun decoration (which should only float over the task list, not the video).
+  useEffect(() => {
+    setHomeViewMode(viewMode);
+  }, [viewMode]);
+
+  useEffect(() => {
+    return () => setHomeViewMode('tasks');
+  }, []);
+
   const visibleStepIndexes = useMemo(() => {
     if (!primaryRoutine) return [] as number[];
 
@@ -225,6 +273,10 @@ export default function HomeScreen() {
       try {
         if (isRoutineWarmed(routine.id)) {
           setAssetsReady(true);
+          // Backfill any newly-added variants (e.g. caption videos) without blocking the UI.
+          syncRoutineAssets(routine).catch((err) =>
+            console.warn('[Home] Background asset backfill failed:', err)
+          );
           return;
         }
 
@@ -232,6 +284,11 @@ export default function HomeScreen() {
         if (ready) {
           markRoutineWarmed(routine.id, true);
           setAssetsReady(true);
+          // Base video/audio are ready, but caption videos are best-effort and may not have been
+          // downloaded yet (e.g. toggled on after the routine was first synced) — backfill them.
+          syncRoutineAssets(routine).catch((err) =>
+            console.warn('[Home] Background asset backfill failed:', err)
+          );
           return;
         }
 
@@ -363,15 +420,6 @@ export default function HomeScreen() {
 
   return (
     <View style={[styles.container, isEvening ? styles.containerEvening : styles.containerMorning]}>
-      <Stack.Screen
-        options={{
-          headerStyle: { backgroundColor: isEvening ? '#2e4385' : '#c6e8e8' },
-          headerTintColor: isEvening ? '#FFF' : '#1E7B7B',
-          headerTitleStyle: { fontFamily: roundedFontBold ?? 'System', fontSize: fs(17), color: isEvening ? '#FFF' : '#1E7B7B' },
-          headerShadowVisible: false,
-        }}
-      />
-
       <StatusBar barStyle={isEvening ? 'light-content' : 'dark-content'} />
 
       {viewMode === 'tasks' ? (
@@ -481,7 +529,7 @@ export default function HomeScreen() {
             onPress={() => setViewMode('tasks')}
             activeOpacity={0.9}
           >
-            <Text style={styles.backToTasksText}>Back To Tasks</Text>
+            <Text style={styles.backToTasksText}>‹ Back</Text>
           </TouchableOpacity>
         </>
       ) : null}
@@ -723,15 +771,19 @@ const styles = StyleSheet.create({
   backToTasksBtn: {
     position: 'absolute',
     left: s(16),
-    right: s(16),
-    bottom: vs(24),
+    top: vs(12),
     borderRadius: ms(18),
     backgroundColor: colors.primary,
-    alignItems: 'center',
-    paddingVertical: vs(12),
+    paddingVertical: vs(8),
+    paddingHorizontal: s(16),
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: ms(6),
+    shadowOffset: { width: 0, height: vs(2) },
   },
   backToTasksText: {
-    fontSize: fs(17),
+    fontSize: fs(15),
     fontWeight: '700',
     color: colors.white,
   },

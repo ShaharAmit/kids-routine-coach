@@ -3,6 +3,7 @@ import {
   Alert,
   Image,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -12,6 +13,7 @@ import {
   View,
 } from 'react-native';
 import { router } from 'expo-router';
+import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import PageBackground from '../../components/PageBackground';
 import { InPageHeader } from '../../components/ScreenHeader';
 import {
@@ -31,6 +33,7 @@ import { scheduleRoutineNotification } from '../../services/notifications';
 import { saveChildProfile, getChildProfile, saveUserProfileDoc } from '../../services/profile';
 import { preloadRoutineAssetsInBackground } from '../../services/assetCacheService';
 import { grantDebugHomeAccess } from '../../services/debugFlow';
+import { calculateAgeFromISO, formatBirthDate, getTodayISO, isoDateYearsAgo } from '../../utils/date';
 import { colors, fs, ms, s, vs } from '../../theme';
 
 const GRASS = require('../../assets/images/grass.png');
@@ -106,7 +109,9 @@ export default function QuestionnaireScreen() {
   const [saving, setSaving] = useState(false);
 
   const [childName, setChildName] = useState('');
-  const [age, setAge] = useState(6);
+  const [birthDate, setBirthDate] = useState(() => isoDateYearsAgo(6));
+
+  const age = useMemo(() => calculateAgeFromISO(birthDate), [birthDate]);
 
   const [answers, setAnswers] = useState<QuestionnaireAnswers>({});
 
@@ -116,7 +121,7 @@ export default function QuestionnaireScreen() {
       .then((profile) => {
         if (!profile || !mounted) return;
         setChildName(profile.childName);
-        setAge(profile.age);
+        setBirthDate(profile.birthDate ?? isoDateYearsAgo(profile.age));
         if (profile.answers) setAnswers(profile.answers);
       })
       .catch((err) => console.warn('[Questionnaire] failed to load profile defaults:', err));
@@ -180,6 +185,7 @@ export default function QuestionnaireScreen() {
         userId,
         childName: childName.trim(),
         age,
+        birthDate,
         gender: 'boy',
         avatarId: DEFAULT_AVATAR_ID,
         voice: DEFAULT_VOICE,
@@ -237,7 +243,7 @@ export default function QuestionnaireScreen() {
       Alert.alert('Save failed', 'Could not save setup. Please try again.');
       setSaving(false);
     }
-  }, [age, answers, childName, saving]);
+  }, [age, birthDate, answers, childName, saving]);
 
   return (
     <PageBackground variant="clouds">
@@ -288,8 +294,9 @@ export default function QuestionnaireScreen() {
                     <NameAgeStep
                       childName={childName}
                       onChangeName={setChildName}
+                      birthDate={birthDate}
                       age={age}
-                      onChangeAge={(next) => setAge(Math.max(MIN_AGE, Math.min(MAX_AGE, next)))}
+                      onChangeBirthDate={setBirthDate}
                     />
                   )}
 
@@ -362,14 +369,46 @@ export default function QuestionnaireScreen() {
 function NameAgeStep({
   childName,
   onChangeName,
+  birthDate,
   age,
-  onChangeAge,
+  onChangeBirthDate,
 }: {
   childName: string;
   onChangeName: (value: string) => void;
+  birthDate: string;
   age: number;
-  onChangeAge: (value: number) => void;
+  onChangeBirthDate: (value: string) => void;
 }) {
+  const [showPicker, setShowPicker] = useState(false);
+  const [draftDate, setDraftDate] = useState(() => new Date(`${birthDate}T00:00:00`));
+
+  const minDate = useMemo(() => new Date(`${isoDateYearsAgo(MAX_AGE + 1)}T00:00:00`), []);
+  const maxDate = useMemo(() => new Date(`${isoDateYearsAgo(MIN_AGE)}T00:00:00`), []);
+
+  const openPicker = useCallback(() => {
+    setDraftDate(new Date(`${birthDate}T00:00:00`));
+    setShowPicker(true);
+  }, [birthDate]);
+
+  const handleChange = useCallback(
+    (event: DateTimePickerEvent, selectedDate?: Date) => {
+      if (Platform.OS === 'android') {
+        setShowPicker(false);
+        if (event.type === 'set' && selectedDate) {
+          onChangeBirthDate(getTodayISO(selectedDate));
+        }
+        return;
+      }
+      if (selectedDate) setDraftDate(selectedDate);
+    },
+    [onChangeBirthDate]
+  );
+
+  const confirmIOSDate = useCallback(() => {
+    onChangeBirthDate(getTodayISO(draftDate));
+    setShowPicker(false);
+  }, [draftDate, onChangeBirthDate]);
+
   return (
     <View>
       <Text style={styles.cardTitle}>
@@ -392,27 +431,55 @@ function NameAgeStep({
       </View>
 
       <Text style={[styles.fieldLabel, { marginTop: vs(22) }]}>How old are they?</Text>
-      <View style={styles.inputRow}>
+      <TouchableOpacity style={styles.inputRow} onPress={openPicker} activeOpacity={0.8}>
         <Text style={styles.inputIcon}>📅</Text>
-        <Text style={styles.ageValue}>{age}</Text>
-        <View style={styles.stepperGroup}>
-          <TouchableOpacity
-            style={styles.stepperButton}
-            onPress={() => onChangeAge(age - 1)}
-            hitSlop={8}
-          >
-            <Text style={styles.stepperText}>−</Text>
-          </TouchableOpacity>
-          <View style={styles.stepperDivider} />
-          <TouchableOpacity
-            style={styles.stepperButton}
-            onPress={() => onChangeAge(age + 1)}
-            hitSlop={8}
-          >
-            <Text style={styles.stepperText}>+</Text>
-          </TouchableOpacity>
+        <Text style={styles.input} numberOfLines={1}>
+          {formatBirthDate(birthDate)}
+        </Text>
+        <View style={styles.ageBadge}>
+          <Text style={styles.ageBadgeText}>{age} yrs</Text>
         </View>
-      </View>
+      </TouchableOpacity>
+
+      {showPicker && Platform.OS === 'android' && (
+        <DateTimePicker
+          value={draftDate}
+          mode="date"
+          display="default"
+          maximumDate={maxDate}
+          minimumDate={minDate}
+          onChange={handleChange}
+        />
+      )}
+
+      {Platform.OS === 'ios' && (
+        <Modal
+          transparent
+          animationType="fade"
+          visible={showPicker}
+          onRequestClose={() => setShowPicker(false)}
+        >
+          <TouchableOpacity
+            style={styles.pickerOverlay}
+            activeOpacity={1}
+            onPress={() => setShowPicker(false)}
+          >
+            <TouchableOpacity style={styles.pickerSheet} activeOpacity={1} onPress={() => {}}>
+              <DateTimePicker
+                value={draftDate}
+                mode="date"
+                display="spinner"
+                maximumDate={maxDate}
+                minimumDate={minDate}
+                onChange={handleChange}
+              />
+              <TouchableOpacity style={styles.pickerDoneButton} onPress={confirmIOSDate}>
+                <Text style={styles.pickerDoneText}>Done</Text>
+              </TouchableOpacity>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Modal>
+      )}
 
       <View style={styles.helperRow}>
         <Text style={styles.heartIconSmall}>💙</Text>
@@ -623,35 +690,41 @@ const styles = StyleSheet.create({
     color: '#21413F',
     fontWeight: '600',
   },
-  ageValue: {
-    flex: 1,
-    fontSize: fs(20),
-    color: '#21413F',
+  ageBadge: {
+    backgroundColor: '#EAF6F6',
+    borderRadius: ms(10),
+    paddingHorizontal: s(10),
+    paddingVertical: vs(5),
+  },
+  ageBadgeText: {
+    fontSize: fs(14),
     fontWeight: '700',
-  },
-  stepperGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: '#D6ECEC',
-    borderRadius: ms(12),
-    overflow: 'hidden',
-  },
-  stepperButton: {
-    width: s(46),
-    height: s(40),
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  stepperDivider: {
-    width: s(1),
-    height: s(24),
-    backgroundColor: '#D6ECEC',
-  },
-  stepperText: {
-    fontSize: fs(24),
     color: TEAL_DARK,
-    fontWeight: '600',
+  },
+  pickerOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: colors.overlayLight,
+  },
+  pickerSheet: {
+    backgroundColor: colors.white,
+    borderTopLeftRadius: ms(20),
+    borderTopRightRadius: ms(20),
+    paddingTop: vs(8),
+    paddingBottom: vs(24),
+    paddingHorizontal: s(16),
+  },
+  pickerDoneButton: {
+    marginTop: vs(8),
+    backgroundColor: TEAL_DARK,
+    borderRadius: ms(14),
+    paddingVertical: vs(12),
+    alignItems: 'center',
+  },
+  pickerDoneText: {
+    color: colors.white,
+    fontSize: fs(16),
+    fontWeight: '700',
   },
   helperRow: {
     flexDirection: 'row',

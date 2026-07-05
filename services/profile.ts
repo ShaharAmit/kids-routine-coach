@@ -127,6 +127,10 @@ export async function getChildProfile(): Promise<ChildProfile | null> {
       answers: (parsed as any).answers ?? undefined,
       totalStarsEarned: typeof parsed.totalStarsEarned === 'number' ? parsed.totalStarsEarned : 0,
       showCaptions: typeof parsed.showCaptions === 'boolean' ? parsed.showCaptions : false,
+      birthDate:
+        typeof parsed.birthDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(parsed.birthDate)
+          ? parsed.birthDate
+          : undefined,
     } as ChildProfile;
   } catch {
     return removeInvalidProfile('json-parse-failure');

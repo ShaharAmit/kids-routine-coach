@@ -2,11 +2,13 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { db, storage, ensureAuth } from './firebase';
 import { doc, getDoc } from 'firebase/firestore';
 import { getDownloadURL, ref } from 'firebase/storage';
-import { Routine, ActivityKey } from '../types';
+import { Routine, ActivityKey, CaptionCue } from '../types';
 import { ACTIVITIES } from '../constants/activities';
+import { TTS_AUDIO_ENABLED } from '../constants/featureFlags';
 
 const VIDEO_DIR = `${FileSystem.documentDirectory}videos/`;
 const AUDIO_DIR = `${FileSystem.documentDirectory}audio/`;
+const CAPTIONS_DIR = `${FileSystem.documentDirectory}captions/`;
 const MIN_VIDEO_FILE_BYTES = 16 * 1024;
 const MIN_AUDIO_FILE_BYTES = 4 * 1024;
 
@@ -20,12 +22,15 @@ async function ensureDirs(): Promise<void> {
   if (!audioDirInfo.exists) {
     await FileSystem.makeDirectoryAsync(AUDIO_DIR, { intermediates: true });
   }
+  const captionsDirInfo = await FileSystem.getInfoAsync(CAPTIONS_DIR);
+  if (!captionsDirInfo.exists) {
+    await FileSystem.makeDirectoryAsync(CAPTIONS_DIR, { intermediates: true });
+  }
 }
 
 /** Returns the local file path for a video asset */
-export function localVideoPath(activityKey: ActivityKey, avatarId: string, withCaptions = false): string {
-  const suffix = withCaptions ? '_captions' : '';
-  return `${VIDEO_DIR}${avatarId}_${activityKey}${suffix}.mp4`;
+export function localVideoPath(activityKey: ActivityKey, avatarId: string): string {
+  return `${VIDEO_DIR}${avatarId}_${activityKey}.mp4`;
 }
 
 export async function isValidCachedVideo(localPath: string): Promise<boolean> {
@@ -40,6 +45,11 @@ export async function isValidCachedVideo(localPath: string): Promise<boolean> {
 /** Returns the local file path for a TTS audio file */
 export function localAudioPath(cacheKey: string): string {
   return `${AUDIO_DIR}${cacheKey}.wav`;
+}
+
+/** Returns the local file path for a caption cue JSON file */
+export function localCaptionsPath(activityKey: ActivityKey, avatarId: string): string {
+  return `${CAPTIONS_DIR}${avatarId}_${activityKey}.json`;
 }
 
 async function isValidCachedAudio(localPath: string): Promise<boolean> {
@@ -83,11 +93,9 @@ export function buildAudioCacheKey(
 
 /**
  * Download a single video file if not already cached locally.
- * Missing captioned variants are non-fatal — older activities may not have one uploaded yet,
- * in which case playback falls back to the non-caption video.
  */
-async function syncVideo(activityKey: ActivityKey, avatarId: string, withCaptions = false): Promise<void> {
-  const localPath = localVideoPath(activityKey, avatarId, withCaptions);
+async function syncVideo(activityKey: ActivityKey, avatarId: string): Promise<void> {
+  const localPath = localVideoPath(activityKey, avatarId);
   const hasValidCachedVideo = await isValidCachedVideo(localPath);
   if (hasValidCachedVideo) return;
 
@@ -96,8 +104,7 @@ async function syncVideo(activityKey: ActivityKey, avatarId: string, withCaption
     await FileSystem.deleteAsync(localPath, { idempotent: true });
   }
 
-  const suffix = withCaptions ? '_captions' : '';
-  const remoteStoragePath = `avatars/${avatarId}/${activityKey}${suffix}.mp4`;
+  const remoteStoragePath = `avatars/${avatarId}/${activityKey}.mp4`;
   const remoteUrl = await getDownloadURL(ref(storage, remoteStoragePath));
   console.log(`[AssetSync] Downloading video: ${remoteUrl}`);
   const downloadResult = await FileSystem.downloadAsync(remoteUrl, localPath);
@@ -145,6 +152,62 @@ async function syncAudio(cacheKey: string, audioUrl: string): Promise<void> {
 }
 
 /**
+ * Download a single activity's caption cue JSON file, if not already cached. Best-effort —
+ * not every activity has captions authored yet, so a 404 here is non-fatal.
+ */
+async function syncCaptions(activityKey: ActivityKey, avatarId: string): Promise<void> {
+  const localPath = localCaptionsPath(activityKey, avatarId);
+  const info = await FileSystem.getInfoAsync(localPath);
+  if (info.exists && 'size' in info && info.size > 0) return;
+
+  if (info.exists) {
+    await FileSystem.deleteAsync(localPath, { idempotent: true });
+  }
+
+  const remoteStoragePath = `avatars/${avatarId}/${activityKey}_captions.json`;
+  const remoteUrl = await getDownloadURL(ref(storage, remoteStoragePath));
+  const downloadResult = await FileSystem.downloadAsync(remoteUrl, localPath);
+
+  const status = (downloadResult as { status?: number }).status;
+  if (typeof status === 'number' && status >= 400) {
+    await FileSystem.deleteAsync(localPath, { idempotent: true });
+    throw new Error(`[AssetSync] Captions download failed (${status}) for ${remoteUrl}`);
+  }
+}
+
+/**
+ * Ensure a single activity's caption cues are downloaded and return the parsed data, or `null`
+ * if no captions exist for that activity (or the download fails). Called on-demand by the
+ * player when captions are toggled on, so we don't rely solely on the background home-screen
+ * backfill sync (which may not have completed yet by the time the child opens a step).
+ */
+export async function ensureCaptionsData(
+  activityKey: ActivityKey,
+  avatarId: string
+): Promise<CaptionCue[] | null> {
+  await ensureDirs();
+  await ensureAuth();
+
+  const localPath = localCaptionsPath(activityKey, avatarId);
+  try {
+    await syncCaptions(activityKey, avatarId);
+  } catch (err) {
+    console.warn(`[AssetSync] No captions available for ${activityKey}:`, err);
+    return null;
+  }
+
+  try {
+    const raw = await FileSystem.readAsStringAsync(localPath);
+    const cues = JSON.parse(raw);
+    return Array.isArray(cues) ? (cues as CaptionCue[]) : null;
+  } catch (err) {
+    console.warn(`[AssetSync] Failed to parse cached captions for ${activityKey}:`, err);
+    await FileSystem.deleteAsync(localPath, { idempotent: true });
+    return null;
+  }
+}
+
+/**
  * Main sync function. Downloads all video and audio assets for a routine.
  * Should be called before the routine notification fires.
  *
@@ -160,20 +223,23 @@ export async function syncRoutineAssets(
   const activityKeys = routine.activityStack.flat();
 
   const syncTasks = activityKeys.map(async (activityKey) => {
-    // 1. Sync video (required) and captioned variant (best-effort — may not exist for every activity)
+    // 1. Sync video (required)
     try {
       await syncVideo(activityKey, routine.avatarId);
     } catch (err) {
       console.warn(`[AssetSync] Failed to download video for ${activityKey}:`, err);
     }
 
+    // 2. Sync caption cues (best-effort — may not exist for every activity)
     try {
-      await syncVideo(activityKey, routine.avatarId, true);
+      await syncCaptions(activityKey, routine.avatarId);
     } catch (err) {
-      console.warn(`[AssetSync] Failed to download captioned video for ${activityKey}:`, err);
+      console.warn(`[AssetSync] Failed to download captions for ${activityKey}:`, err);
     }
 
-    // 2. Sync audio
+    // 3. Sync audio (skipped while personalized TTS narration is disabled — see featureFlags.ts)
+    if (!TTS_AUDIO_ENABLED) return;
+
     const cacheKey = buildAudioCacheKey(
       routine.childName,
       activityKey,
@@ -214,6 +280,8 @@ export async function areAssetsReady(routine: Routine): Promise<boolean> {
     const videoReady = await isValidCachedVideo(localVideoPath(activityKey, routine.avatarId));
     if (!videoReady) return false;
 
+    if (!TTS_AUDIO_ENABLED) continue; // Narration audio comes from the video itself for now.
+
     const cacheKey = buildAudioCacheKey(
       routine.childName,
       activityKey,
@@ -238,10 +306,10 @@ export async function clearRoutineAssets(routine: Routine): Promise<void> {
       await FileSystem.deleteAsync(videoPath, { idempotent: true });
     }
 
-    const captionVideoPath = localVideoPath(activityKey, routine.avatarId, true);
-    const captionVideoInfo = await FileSystem.getInfoAsync(captionVideoPath);
-    if (captionVideoInfo.exists) {
-      await FileSystem.deleteAsync(captionVideoPath, { idempotent: true });
+    const captionsPath = localCaptionsPath(activityKey, routine.avatarId);
+    const captionsInfo = await FileSystem.getInfoAsync(captionsPath);
+    if (captionsInfo.exists) {
+      await FileSystem.deleteAsync(captionsPath, { idempotent: true });
     }
 
     const cacheKey = buildAudioCacheKey(
@@ -260,7 +328,7 @@ export async function clearRoutineAssets(routine: Routine): Promise<void> {
 }
 
 /**
- * Delete all cached routine media assets (video/audio) on device.
+ * Delete all cached routine media assets (video/audio/captions) on device.
  */
 export async function clearAllRoutineAssets(): Promise<void> {
   const videoDirInfo = await FileSystem.getInfoAsync(VIDEO_DIR);
@@ -272,4 +340,10 @@ export async function clearAllRoutineAssets(): Promise<void> {
   if (audioDirInfo.exists) {
     await FileSystem.deleteAsync(AUDIO_DIR, { idempotent: true });
   }
+
+  const captionsDirInfo = await FileSystem.getInfoAsync(CAPTIONS_DIR);
+  if (captionsDirInfo.exists) {
+    await FileSystem.deleteAsync(CAPTIONS_DIR, { idempotent: true });
+  }
 }
+

@@ -108,6 +108,8 @@ export interface ChildProfile {
   userId: string;
   childName: string;
   age: number;
+  /** ISO `YYYY-MM-DD` date of birth. `age` is derived from this and kept in sync at save time. */
+  birthDate?: string;
   gender: ChildGender;
   avatarId: string;
   voice: VoiceOption;
@@ -144,6 +146,13 @@ export interface AudioCacheEntry {
   audioUrl: string;
   status: 'pending' | 'generating' | 'ready' | 'error';
   createdAt?: number;
+}
+
+/** A single timed subtitle line, in seconds, rendered as an overlay while its video plays. */
+export interface CaptionCue {
+  start: number;
+  end: number;
+  text: string;
 }
 
 export interface ActivityMeta {

@@ -1,10 +1,11 @@
 import React, { useEffect, useCallback, useState } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, Dimensions } from 'react-native';
-import { VideoView, useVideoPlayer } from 'expo-video';
+import { StyleSheet, View, Text, TouchableOpacity, Dimensions, ScrollView } from 'react-native';
+import { VideoView, useVideoPlayer, VideoSize } from 'expo-video';
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
-import { ActivityStep } from '../types';
+import { ActivityStep, CaptionCue } from '../types';
 import { ACTIVITIES } from '../constants/activities';
-import { localVideoPath, localAudioPath, buildAudioCacheKey, isValidCachedVideo } from '../services/assetSync';
+import { TTS_AUDIO_ENABLED } from '../constants/featureFlags';
+import { localVideoPath, localAudioPath, buildAudioCacheKey, ensureCaptionsData } from '../services/assetSync';
 import { colors, fs, ms, s, vs } from '../theme';
 
 interface ActivityPlayerProps {
@@ -17,7 +18,16 @@ interface ActivityPlayerProps {
   onComplete: () => void;
 }
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+const CONTAINER_WIDTH = SCREEN_WIDTH * 0.8;
+const MAX_CONTAINER_HEIGHT = SCREEN_HEIGHT * 0.55;
+// All avatar clips are currently recorded in 9:16 portrait; used until the real size loads.
+const DEFAULT_ASPECT_RATIO = 9 / 16;
+
+function clampContainerHeight(aspectRatio: number): number {
+  const idealHeight = CONTAINER_WIDTH / aspectRatio;
+  return Math.min(idealHeight, MAX_CONTAINER_HEIGHT);
+}
 
 export default function ActivityPlayer({
   activityStep,
@@ -30,42 +40,52 @@ export default function ActivityPlayer({
 }: ActivityPlayerProps) {
   const [activityIndex, setActivityIndex] = useState(0);
   const [videoEnded, setVideoEnded] = useState(false);
+  const [aspectRatio, setAspectRatio] = useState(DEFAULT_ASPECT_RATIO);
+  const [captionCues, setCaptionCues] = useState<CaptionCue[] | null>(null);
+  const [currentTime, setCurrentTime] = useState(0);
 
   const currentActivityKey = activityStep[activityIndex];
   const activity = ACTIVITIES[currentActivityKey];
 
-  const plainVideoUri = localVideoPath(currentActivityKey, avatarId);
-  const captionVideoUri = localVideoPath(currentActivityKey, avatarId, true);
-  // Default to the non-caption video; swap to the captioned variant once we confirm it's cached
-  // locally (older activities may not have a caption video uploaded yet).
-  const [videoUri, setVideoUri] = useState(plainVideoUri);
+  const videoUri = localVideoPath(currentActivityKey, avatarId);
 
+  // Load timed caption cues for this activity when subtitles are toggled on. Downloads on demand
+  // rather than relying solely on the home screen's best-effort background backfill.
   useEffect(() => {
     let cancelled = false;
+    setCaptionCues(null);
 
     if (!showCaptions) {
-      setVideoUri(plainVideoUri);
       return () => {
         cancelled = true;
       };
     }
 
-    isValidCachedVideo(captionVideoUri).then((isValid) => {
-      if (cancelled) return;
-      setVideoUri(isValid ? captionVideoUri : plainVideoUri);
+    ensureCaptionsData(currentActivityKey, avatarId).then((cues) => {
+      if (!cancelled) setCaptionCues(cues);
     });
 
     return () => {
       cancelled = true;
     };
-  }, [captionVideoUri, plainVideoUri, showCaptions]);
+  }, [currentActivityKey, avatarId, showCaptions]);
+
+  useEffect(() => {
+    setAspectRatio(DEFAULT_ASPECT_RATIO);
+  }, [currentActivityKey]);
+
+  const activeCaption = captionCues?.find((cue) => currentTime >= cue.start && currentTime < cue.end) ?? null;
+  const activeCaptionText = activeCaption ? activeCaption.text.replace(/\{\{\s*name\s*\}\}/gi, childName) : null;
 
   const cacheKey = buildAudioCacheKey(childName, currentActivityKey, avatarId);
-  const audioUri = localAudioPath(cacheKey);
+  // Personalized TTS narration is currently disabled — the avatar videos already carry their own
+  // baked-in audio track, so we don't load a separate overlay track (see featureFlags.ts).
+  const audioUri = TTS_AUDIO_ENABLED ? localAudioPath(cacheKey) : null;
 
   const videoPlayer = useVideoPlayer(videoUri, (p: ReturnType<typeof useVideoPlayer>) => {
     p.loop = false;
-    p.muted = true; // video is always silent; audio comes from TTS
+    p.muted = false; // avatar videos carry their own narration audio
+    p.timeUpdateEventInterval = 0.2; // needed for smoothly synced caption cues
     p.play();
   });
 
@@ -81,15 +101,28 @@ export default function ActivityPlayer({
 
     const videoEndSub = videoPlayer.addListener('playToEnd', () => {
       setVideoEnded(true);
-      audioPlayer.pause();
+      if (TTS_AUDIO_ENABLED) audioPlayer.pause();
+    });
+
+    const trackChangeSub = videoPlayer.addListener('videoTrackChange', ({ videoTrack }) => {
+      const size = videoTrack?.size as VideoSize | undefined;
+      if (size && size.width > 0 && size.height > 0) {
+        setAspectRatio(size.width / size.height);
+      }
+    });
+
+    const timeUpdateSub = videoPlayer.addListener('timeUpdate', ({ currentTime: time }) => {
+      setCurrentTime(time);
     });
 
     return () => {
       videoEndSub.remove();
+      trackChangeSub.remove();
+      timeUpdateSub.remove();
 
       // On fast screen unmounts, native media objects can already be released.
       try {
-        audioPlayer.pause();
+        if (TTS_AUDIO_ENABLED) audioPlayer.pause();
       } catch {
         // no-op
       }
@@ -102,8 +135,9 @@ export default function ActivityPlayer({
     };
   }, [audioPlayer, videoPlayer]);
 
-  // Start playback only after the source is loaded.
+  // Start TTS overlay playback only after the source is loaded (no-op while disabled).
   useEffect(() => {
+    if (!TTS_AUDIO_ENABLED) return;
     if (!audioStatus.isLoaded || audioStatus.playing) return;
 
     audioPlayer.loop = false;
@@ -116,7 +150,7 @@ export default function ActivityPlayer({
     setVideoEnded(false);
     videoPlayer.replay();
 
-    if (audioStatus.isLoaded) {
+    if (TTS_AUDIO_ENABLED && audioStatus.isLoaded) {
       try {
         await audioPlayer.seekTo(0);
       } catch {
@@ -128,7 +162,7 @@ export default function ActivityPlayer({
 
   const handleComplete = useCallback(() => {
     try {
-      audioPlayer.pause();
+      if (TTS_AUDIO_ENABLED) audioPlayer.pause();
     } catch {
       // no-op
     }
@@ -145,7 +179,11 @@ export default function ActivityPlayer({
   if (!activity) return null;
 
   return (
-    <View style={[styles.container, { backgroundColor: activity.color + '22' }]}>
+    <ScrollView
+      style={[styles.scrollView, { backgroundColor: activity.color + '22' }]}
+      contentContainerStyle={styles.container}
+      showsVerticalScrollIndicator={false}
+    >
       {/* Progress indicator */}
       <View style={styles.progressRow}>
         {Array.from({ length: totalSteps }).map((_, i) => (
@@ -175,13 +213,24 @@ export default function ActivityPlayer({
       <Text style={[styles.activityLabel, { color: activity.color }]}>{activity.label}</Text>
 
       {/* Avatar video loop */}
-      <View style={styles.videoContainer}>
+      <View
+        style={[
+          styles.videoContainer,
+          { width: CONTAINER_WIDTH, height: clampContainerHeight(aspectRatio) },
+        ]}
+      >
         <VideoView
           player={videoPlayer}
           style={styles.video}
-          contentFit="contain"
+          contentFit="cover"
           nativeControls={false}
         />
+
+        {showCaptions && activeCaptionText ? (
+          <View style={styles.captionBar} pointerEvents="none">
+            <Text style={styles.captionText}>{activeCaptionText}</Text>
+          </View>
+        ) : null}
       </View>
 
       {videoEnded && (
@@ -211,17 +260,21 @@ export default function ActivityPlayer({
               : '✅ Mission Complete!'}
         </Text>
       </TouchableOpacity>
-    </View>
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  scrollView: {
     flex: 1,
+  },
+  container: {
+    flexGrow: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: s(24),
-    paddingVertical: vs(32),
+    paddingTop: vs(56),
+    paddingBottom: vs(40),
   },
   progressRow: {
     flexDirection: 'row',
@@ -256,8 +309,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   videoContainer: {
-    width: SCREEN_WIDTH * 0.75,
-    height: SCREEN_WIDTH * 0.75,
     borderRadius: ms(24),
     overflow: 'hidden',
     backgroundColor: '#F0F0F0',
@@ -271,6 +322,22 @@ const styles = StyleSheet.create({
   video: {
     width: '100%',
     height: '100%',
+  },
+  captionBar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: s(14),
+    paddingVertical: vs(8),
+    backgroundColor: 'rgba(0,0,0,0.55)',
+  },
+  captionText: {
+    color: colors.white,
+    fontSize: fs(16),
+    fontWeight: '700',
+    textAlign: 'center',
+    lineHeight: fs(20),
   },
   retryButton: {
     borderWidth: 2,

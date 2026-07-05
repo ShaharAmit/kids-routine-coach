@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   ScrollView,
   StyleSheet,
@@ -26,6 +27,7 @@ export default function SettingsScreen() {
   const [starsCount, setStarsCount] = useState(0);
   const [isResetting, setIsResetting] = useState(false);
   const [isSavingCaptions, setIsSavingCaptions] = useState(false);
+  const [isClearingCache, setIsClearingCache] = useState(false);
 
   const avatarEmoji = useMemo(() => {
     if (!profile) return '🙂';
@@ -150,6 +152,34 @@ export default function SettingsScreen() {
     );
   };
 
+  const handleClearCache = async () => {
+    if (isClearingCache) return;
+    setIsClearingCache(true);
+    try {
+      await clearAllLocalCachedAssets();
+      Alert.alert(
+        'Cache cleared',
+        'All locally cached videos, audio, and captions were removed. They will be re-downloaded next time you open a routine.'
+      );
+    } catch (err) {
+      console.warn('[Settings] failed to clear cached assets:', err);
+      Alert.alert('Clear failed', 'Could not clear cached assets right now. Please try again.');
+    } finally {
+      setIsClearingCache(false);
+    }
+  };
+
+  const confirmClearCache = () => {
+    Alert.alert(
+      'Clear cached media?',
+      'This removes downloaded videos, audio, and captions from this device (your profile and routines are kept). They will be re-downloaded automatically.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Clear cache', style: 'destructive', onPress: handleClearCache },
+      ]
+    );
+  };
+
   const handleToggleCaptions = async (value: boolean) => {
     if (!profile || isSavingCaptions) return;
 
@@ -239,6 +269,26 @@ export default function SettingsScreen() {
               <Text style={styles.actionSubtitle}>Add another activity and routine step.</Text>
             </View>
             <Text style={styles.chevron}>›</Text>
+          </View>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.card, styles.actionCard, isClearingCache && styles.disabledCard]}
+          onPress={confirmClearCache}
+          disabled={isClearingCache}
+        >
+          <View style={styles.rowBetween}>
+            <View style={styles.actionTextWrap}>
+              <Text style={styles.actionTitle}>Clear cached media</Text>
+              <Text style={styles.actionSubtitle}>
+                Redownload videos, audio, and captions (keeps your profile and routines).
+              </Text>
+            </View>
+            {isClearingCache ? (
+              <ActivityIndicator color={colors.textMuted} />
+            ) : (
+              <Text style={styles.chevron}>›</Text>
+            )}
           </View>
         </TouchableOpacity>
 

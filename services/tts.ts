@@ -3,6 +3,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import { functions, db, ensureAuth } from './firebase';
 import { Routine, ActivityKey, AudioCacheEntry } from '../types';
 import { ACTIVITIES } from '../constants/activities';
+import { TTS_AUDIO_ENABLED } from '../constants/featureFlags';
 import { buildAudioCacheKey } from './assetSync';
 
 interface GenerateTTSRequest {
@@ -26,6 +27,8 @@ interface GenerateTTSResponse {
  * Called when a parent saves/updates a routine.
  */
 export async function ensureAudioForRoutine(routine: Routine): Promise<void> {
+  if (!TTS_AUDIO_ENABLED) return; // Avatar videos already carry baked-in narration audio for now.
+
   await ensureAuth();
   const generateTTS = httpsCallable<GenerateTTSRequest, GenerateTTSResponse>(
     functions,

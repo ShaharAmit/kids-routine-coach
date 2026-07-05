@@ -5,6 +5,7 @@ import * as Notifications from 'expo-notifications';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { clearDebugHomeAccess, hasDebugHomeAccess } from '../services/debugFlow';
+import { getHomeViewMode, subscribeHomeViewMode } from '../services/homeViewState';
 import { getCurrentSegment, segmentToTitle, segmentToSubtitle, type DaySegment, segmentToTitleColor, segmentToSubtitleColor } from '../utils/timeOfDay';
 import { colors, fs, ms, s, vs } from '../theme';
 
@@ -46,7 +47,12 @@ export default function RootLayout() {
   const prevPathnameRef = useRef<string | null>(null);
   const [segment, setSegment] = useState<DaySegment>(getCurrentSegment);
   const [showDecorations, setShowDecorations] = useState(false);
+  const [homeViewMode, setHomeViewModeLocal] = useState(getHomeViewMode);
   const tabBarHorizontalInset = Math.round(screenWidth * 0.05);
+
+  useEffect(() => {
+    return subscribeHomeViewMode(setHomeViewModeLocal);
+  }, []);
 
   // Re-evaluate segment when app returns to foreground
   useEffect(() => {
@@ -129,8 +135,8 @@ export default function RootLayout() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      {/* Moon/Sun decoration - positioned between header and content - only on routines tab */}
-      {pathname === '/' && showDecorations && (
+      {/* Moon/Sun decoration - positioned between header and content - only on routines tab's task list */}
+      {pathname === '/' && showDecorations && homeViewMode === 'tasks' && (
         <View style={{ position: 'absolute', right: s(16), top: vs(80), zIndex: 50, pointerEvents: 'none' }}>
           {segment === 'evening' ? (
             <Image
