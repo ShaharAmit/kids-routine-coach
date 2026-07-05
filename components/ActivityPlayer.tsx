@@ -4,7 +4,7 @@ import { VideoView, useVideoPlayer } from 'expo-video';
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
 import { ActivityStep } from '../types';
 import { ACTIVITIES } from '../constants/activities';
-import { localVideoPath, localAudioPath, buildAudioCacheKey } from '../services/assetSync';
+import { localVideoPath, localAudioPath, buildAudioCacheKey, isValidCachedVideo } from '../services/assetSync';
 import { colors, fs, ms, s, vs } from '../theme';
 
 interface ActivityPlayerProps {
@@ -13,6 +13,7 @@ interface ActivityPlayerProps {
   avatarId: string;
   stepNumber: number;
   totalSteps: number;
+  showCaptions?: boolean;
   onComplete: () => void;
 }
 
@@ -24,6 +25,7 @@ export default function ActivityPlayer({
   avatarId,
   stepNumber,
   totalSteps,
+  showCaptions = false,
   onComplete,
 }: ActivityPlayerProps) {
   const [activityIndex, setActivityIndex] = useState(0);
@@ -32,7 +34,32 @@ export default function ActivityPlayer({
   const currentActivityKey = activityStep[activityIndex];
   const activity = ACTIVITIES[currentActivityKey];
 
-  const videoUri = localVideoPath(currentActivityKey, avatarId);
+  const plainVideoUri = localVideoPath(currentActivityKey, avatarId);
+  const captionVideoUri = localVideoPath(currentActivityKey, avatarId, true);
+  // Default to the non-caption video; swap to the captioned variant once we confirm it's cached
+  // locally (older activities may not have a caption video uploaded yet).
+  const [videoUri, setVideoUri] = useState(plainVideoUri);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!showCaptions) {
+      setVideoUri(plainVideoUri);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    isValidCachedVideo(captionVideoUri).then((isValid) => {
+      if (cancelled) return;
+      setVideoUri(isValid ? captionVideoUri : plainVideoUri);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [captionVideoUri, plainVideoUri, showCaptions]);
+
   const cacheKey = buildAudioCacheKey(childName, currentActivityKey, avatarId);
   const audioUri = localAudioPath(cacheKey);
 

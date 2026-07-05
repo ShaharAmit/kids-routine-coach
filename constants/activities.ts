@@ -1,4 +1,4 @@
-import { ActivityMeta } from '../types';
+import { ActivityKey, ActivityMeta } from '../types';
 
 export interface ActivityConfig {
   id: string;
@@ -39,7 +39,7 @@ export const ADDITIONAL_ACTIVITIES: ActivityConfig[] = [
   },
 ];
 
-export const ACTIVITIES: Record<string, ActivityMeta> = {
+export const ACTIVITIES: Record<ActivityKey, ActivityMeta> = {
   brush_teeth: {
     key: 'brush_teeth',
     label: 'Brush Teeth',
@@ -135,6 +135,54 @@ export const ACTIVITIES: Record<string, ActivityMeta> = {
     videoFile: 'avatar_loop_pajamas.mp4',
     emoji: '👕',
     color: '#EC407A',
+  },
+  bedtime_story: {
+    key: 'bedtime_story',
+    label: 'Bedtime Story',
+    promptTemplate: (name) => `Cuddle up, ${name}. Let us read a lovely bedtime story together.`,
+    videoFile: 'bedtime_story.mp4',
+    emoji: '📖',
+    color: '#7986CB',
+  },
+  eat_dinner: {
+    key: 'eat_dinner',
+    label: 'Eat Dinner',
+    promptTemplate: (name) => `Dinner time, ${name}! Let us sit down and enjoy a healthy meal.`,
+    videoFile: 'eat_dinner.mp4',
+    emoji: '🍽️',
+    color: '#FF8A65',
+  },
+  go_to_sleep: {
+    key: 'go_to_sleep',
+    label: 'Go to Sleep',
+    promptTemplate: (name) => `Sweet dreams, ${name}. It is time to close your eyes and go to sleep.`,
+    videoFile: 'go_to_sleep.mp4',
+    emoji: '😴',
+    color: '#5C6BC0',
+  },
+  homework: {
+    key: 'homework',
+    label: 'Homework',
+    promptTemplate: (name) => `Great focus, ${name}! Let us sit down and finish our homework.`,
+    videoFile: 'homework.mp4',
+    emoji: '📝',
+    color: '#4DB6AC',
+  },
+  make_bed: {
+    key: 'make_bed',
+    label: 'Make Bed',
+    promptTemplate: (name) => `Nice work, ${name}! Let us make the bed nice and tidy.`,
+    videoFile: 'make_bed.mp4',
+    emoji: '🛏️',
+    color: '#9575CD',
+  },
+  wake_up: {
+    key: 'wake_up',
+    label: 'Wake Up',
+    promptTemplate: (name) => `Good morning, ${name}! Time to wake up and start a wonderful day.`,
+    videoFile: 'wake_up.mp4',
+    emoji: '☀️',
+    color: '#FFCA28',
   },
 };
 

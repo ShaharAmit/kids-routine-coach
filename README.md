@@ -118,7 +118,7 @@ npx expo start
   "id": "liam_routine_1234567890",
   "userId": "firebase_auth_uid",
   "childName": "Liam",
-  "avatarId": "avatar_boy_01",
+  "avatarId": "becky",
   "scheduledTime": "08:00",
   "activityStack": ["brush_teeth", "get_dressed", "eat_breakfast"],
   "notificationId": "expo-notification-id"
@@ -156,8 +156,8 @@ Document ID: `{normalizedChildName}_{activityKey}_{avatarId}`
 
 ```json
 {
-  "id": "liam_brush_teeth_avatar_boy_01",
-  "audioUrl": "https://storage.googleapis.com/.../liam_brush_teeth_avatar_boy_01.mp3",
+  "id": "liam_brush_teeth_becky",
+  "audioUrl": "https://storage.googleapis.com/.../liam_brush_teeth_becky.mp3",
   "status": "ready",
   "createdAt": "Firestore Timestamp"
 }
@@ -180,7 +180,7 @@ Place `.mp4` silent avatar loop files in Firebase Storage under:
 avatars/{avatarId}/{activityKey}.mp4
 ```
 
-Example: `avatars/avatar_boy_01/brush_teeth.mp4`
+Example: `avatars/becky/brush_teeth.mp4`
 
 ## 🔒 Security
 

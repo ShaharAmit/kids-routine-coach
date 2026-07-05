@@ -10,7 +10,13 @@ export type ActivityKey =
   | 'tidy_room'
   | 'take_shower'
   | 'read_book'
-  | 'put_on_pajamas';
+  | 'put_on_pajamas'
+  | 'bedtime_story'
+  | 'eat_dinner'
+  | 'go_to_sleep'
+  | 'homework'
+  | 'make_bed'
+  | 'wake_up';
 
 export type ToneOption = 'cheerful' | 'encouraging' | 'calm';
 export type VoiceOption = 'woman' | 'man';
@@ -112,6 +118,8 @@ export interface ChildProfile {
   answers?: QuestionnaireAnswers;
   totalStarsEarned: number;
   updatedAt: number;
+  /** Parent preference: overlay subtitles on avatar videos during routine playback. Defaults to false. */
+  showCaptions?: boolean;
 }
 
 /** Daily task completion state — stored in AsyncStorage only, never synced to Firestore */

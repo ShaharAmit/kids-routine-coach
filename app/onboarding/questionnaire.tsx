@@ -12,8 +12,8 @@ import {
   View,
 } from 'react-native';
 import { router } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import CloudsBackground from '../../components/CloudsBackground';
+import PageBackground from '../../components/PageBackground';
+import { InPageHeader } from '../../components/ScreenHeader';
 import {
   ChildProfile,
   HelpLevel,
@@ -35,7 +35,7 @@ import { colors, fs, ms, s, vs } from '../../theme';
 
 const GRASS = require('../../assets/images/grass.png');
 
-const DEFAULT_AVATAR_ID = 'avatar_boy_01';
+const DEFAULT_AVATAR_ID = 'becky';
 const DEFAULT_VOICE = 'woman' as const;
 const DEFAULT_SCHEDULED_TIME = '08:00';
 const DEFAULT_EVENING_TIME = '19:00';
@@ -240,21 +240,15 @@ export default function QuestionnaireScreen() {
   }, [age, answers, childName, saving]);
 
   return (
-    <View style={styles.root}>
-      <CloudsBackground />
-      <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-        <KeyboardAvoidingView
-          style={styles.flex}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        >
-          {/* Header */}
-          <View style={styles.header}>
-            <TouchableOpacity style={styles.backButton} onPress={goBack} hitSlop={10}>
-              <Text style={styles.backChevron}>‹</Text>
-            </TouchableOpacity>
-            <Text style={styles.headerTitle}>Setup Questionnaire</Text>
-            <View style={styles.headerSpacer} />
-          </View>
+    <PageBackground variant="clouds">
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        {/* Header */}
+        <View style={styles.headerPad}>
+          <InPageHeader title="Setup Questionnaire" onBack={goBack} />
+        </View>
 
           {!showFinal && (
             <View style={styles.progressWrap}>
@@ -361,8 +355,7 @@ export default function QuestionnaireScreen() {
             </View>
           )}
         </KeyboardAvoidingView>
-      </SafeAreaView>
-    </View>
+    </PageBackground>
   );
 }
 
@@ -513,51 +506,12 @@ const TEAL_DARK = colors.teal;
 const TEAL = '#3FA9A0';
 
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: colors.morningBg,
-  },
   flex: {
     flex: 1,
   },
-  safe: {
-    flex: 1,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+  headerPad: {
     paddingHorizontal: s(18),
     paddingTop: vs(6),
-  },
-  backButton: {
-    width: s(44),
-    height: s(44),
-    borderRadius: ms(22),
-    backgroundColor: colors.white,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#0B5757',
-    shadowOpacity: 0.12,
-    shadowRadius: ms(6),
-    shadowOffset: { width: s(0), height: vs(2) },
-    elevation: 2,
-  },
-  headerSpacer: {
-    width: s(44),
-    height: s(44),
-  },
-  backChevron: {
-    fontSize: fs(28),
-    lineHeight: fs(30),
-    color: TEAL_DARK,
-    fontWeight: '700',
-    marginTop: vs(-2),
-  },
-  headerTitle: {
-    fontSize: fs(18),
-    fontWeight: '800',
-    color: TEAL_DARK,
   },
   progressWrap: {
     alignItems: 'center',

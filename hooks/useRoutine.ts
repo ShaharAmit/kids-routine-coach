@@ -103,7 +103,7 @@ function composeRoutine(
     userId,
     childName: userProfile?.childName ?? '',
     childAge: userProfile?.childAge,
-    avatarId: userProfile?.avatarId ?? 'avatar_boy_01',
+    avatarId: userProfile?.avatarId ?? 'becky',
     scheduledTime,
     activityStack,
     stepIds,

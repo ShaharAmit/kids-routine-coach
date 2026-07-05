@@ -2,7 +2,7 @@ import { colors } from "@/theme/colors";
 
 // 04:00–14:59 → morning, 15:00–03:59 → evening
 export const MORNING_START_MINUTES = 4 * 60;
-export const EVENING_START_MINUTES = 9 * 60;
+export const EVENING_START_MINUTES = 16 * 60;
 
 export type DaySegment = 'morning' | 'evening';
 

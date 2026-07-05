@@ -23,11 +23,12 @@ async function ensureDirs(): Promise<void> {
 }
 
 /** Returns the local file path for a video asset */
-export function localVideoPath(activityKey: ActivityKey, avatarId: string): string {
-  return `${VIDEO_DIR}${avatarId}_${activityKey}.mp4`;
+export function localVideoPath(activityKey: ActivityKey, avatarId: string, withCaptions = false): string {
+  const suffix = withCaptions ? '_captions' : '';
+  return `${VIDEO_DIR}${avatarId}_${activityKey}${suffix}.mp4`;
 }
 
-async function isValidCachedVideo(localPath: string): Promise<boolean> {
+export async function isValidCachedVideo(localPath: string): Promise<boolean> {
   const info = await FileSystem.getInfoAsync(localPath);
   if (!info.exists) return false;
 
@@ -82,9 +83,11 @@ export function buildAudioCacheKey(
 
 /**
  * Download a single video file if not already cached locally.
+ * Missing captioned variants are non-fatal — older activities may not have one uploaded yet,
+ * in which case playback falls back to the non-caption video.
  */
-async function syncVideo(activityKey: ActivityKey, avatarId: string): Promise<void> {
-  const localPath = localVideoPath(activityKey, avatarId);
+async function syncVideo(activityKey: ActivityKey, avatarId: string, withCaptions = false): Promise<void> {
+  const localPath = localVideoPath(activityKey, avatarId, withCaptions);
   const hasValidCachedVideo = await isValidCachedVideo(localPath);
   if (hasValidCachedVideo) return;
 
@@ -93,7 +96,8 @@ async function syncVideo(activityKey: ActivityKey, avatarId: string): Promise<vo
     await FileSystem.deleteAsync(localPath, { idempotent: true });
   }
 
-  const remoteStoragePath = `avatars/${avatarId}/${activityKey}.mp4`;
+  const suffix = withCaptions ? '_captions' : '';
+  const remoteStoragePath = `avatars/${avatarId}/${activityKey}${suffix}.mp4`;
   const remoteUrl = await getDownloadURL(ref(storage, remoteStoragePath));
   console.log(`[AssetSync] Downloading video: ${remoteUrl}`);
   const downloadResult = await FileSystem.downloadAsync(remoteUrl, localPath);
@@ -156,11 +160,17 @@ export async function syncRoutineAssets(
   const activityKeys = routine.activityStack.flat();
 
   const syncTasks = activityKeys.map(async (activityKey) => {
-    // 1. Sync video
+    // 1. Sync video (required) and captioned variant (best-effort — may not exist for every activity)
     try {
       await syncVideo(activityKey, routine.avatarId);
     } catch (err) {
       console.warn(`[AssetSync] Failed to download video for ${activityKey}:`, err);
+    }
+
+    try {
+      await syncVideo(activityKey, routine.avatarId, true);
+    } catch (err) {
+      console.warn(`[AssetSync] Failed to download captioned video for ${activityKey}:`, err);
     }
 
     // 2. Sync audio
@@ -226,6 +236,12 @@ export async function clearRoutineAssets(routine: Routine): Promise<void> {
     const videoInfo = await FileSystem.getInfoAsync(videoPath);
     if (videoInfo.exists) {
       await FileSystem.deleteAsync(videoPath, { idempotent: true });
+    }
+
+    const captionVideoPath = localVideoPath(activityKey, routine.avatarId, true);
+    const captionVideoInfo = await FileSystem.getInfoAsync(captionVideoPath);
+    if (captionVideoInfo.exists) {
+      await FileSystem.deleteAsync(captionVideoPath, { idempotent: true });
     }
 
     const cacheKey = buildAudioCacheKey(

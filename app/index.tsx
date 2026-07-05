@@ -83,6 +83,7 @@ export default function HomeScreen() {
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [assetsReady, setAssetsReady] = useState(false);
   const [trophyVisible, setTrophyVisible] = useState(false);
+  const [showCaptions, setShowCaptions] = useState(false);
   const [trophyShownThisSession, setTrophyShownThisSession] = useState<Record<'morning' | 'evening', boolean>>({
     morning: false,
     evening: false,
@@ -153,13 +154,30 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => {
+    let mounted = true;
+
+    async function loadCaptionPreference() {
+      const profile = await getChildProfile();
+      if (mounted) {
+        setShowCaptions(profile?.showCaptions ?? false);
+      }
+    }
+
+    loadCaptionPreference().catch((err) => {
+      console.warn('[Home] failed to load caption preference:', err);
+    });
+
     const appStateSub = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
         setSegment(getCurrentSegment());
+        loadCaptionPreference().catch((err) => {
+          console.warn('[Home] failed to refresh caption preference:', err);
+        });
       }
     });
 
     return () => {
+      mounted = false;
       appStateSub.remove();
     };
   }, []);
@@ -454,6 +472,7 @@ export default function HomeScreen() {
             avatarId={primaryRoutine.avatarId}
             stepNumber={scopedPosition + 1}
             totalSteps={visibleStepIndexes.length}
+            showCaptions={showCaptions}
             onComplete={handleStepComplete}
           />
 

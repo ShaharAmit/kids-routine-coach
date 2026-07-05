@@ -163,9 +163,10 @@ export default function RootLayout() {
       ) : (
         <Tabs
           screenOptions={{
-            headerStyle: { backgroundColor: colors.primary },
-            headerTintColor: '#FFF',
+            headerStyle: { backgroundColor: colors.appBg },
+            headerTintColor: colors.textInk,
             headerTitleStyle: { fontWeight: '700', fontSize: fs(18) },
+            headerShadowVisible: false,
             tabBarStyle: {
               position: 'absolute',
               marginHorizontal: tabBarHorizontalInset,
@@ -208,7 +209,9 @@ export default function RootLayout() {
             name="rewards"
             options={{
               title: 'Rewards',
-            tabBarLabel: ({ color }) => <TabLabel text="Rewards" color={color} />,
+              headerStyle: { backgroundColor: colors.morningBg },
+              headerTintColor: colors.textInk,
+              tabBarLabel: ({ color }) => <TabLabel text="Rewards" color={color} />,
               tabBarIcon: ({ color, size }) => (
                 <MaterialCommunityIcons name="star" size={size} color={color} />
               ),
@@ -218,7 +221,9 @@ export default function RootLayout() {
             name="settings"
             options={{
               title: 'Settings',
-            tabBarLabel: ({ color }) => <TabLabel text="Settings" color={color} />,
+              headerStyle: { backgroundColor: colors.morningBg },
+              headerTintColor: colors.textInk,
+              tabBarLabel: ({ color }) => <TabLabel text="Settings" color={color} />,
               tabBarIcon: ({ color, size }) => (
                 <MaterialCommunityIcons name="cog" size={size} color={color} />
               ),
@@ -226,7 +231,15 @@ export default function RootLayout() {
           />
           <Tabs.Screen name="loading" options={{ href: null }} />
           <Tabs.Screen name="onboarding" options={{ href: null }} />
-          <Tabs.Screen name="parent/create" options={{ href: null }} />
+          <Tabs.Screen
+            name="parent/create"
+            options={{
+              href: null,
+              title: 'Add Activity',
+              headerStyle: { backgroundColor: '#F5F7FA' },
+              headerTintColor: colors.textInk,
+            }}
+          />
         </Tabs>
       )}
     </GestureHandlerRootView>

@@ -7,10 +7,10 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Stack, usePathname } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import StarBank from '../components/StarBank';
 import DailyProgressCard from '../components/DailyProgressCard';
-import CloudsBackground from '../components/CloudsBackground';
+import PageBackground from '../components/PageBackground';
+import { getNativeHeaderOptions } from '../components/ScreenHeader';
 import { getChildProfile } from '../services/profile';
 import { ensureAuth } from '../services/firebase';
 import { useUserRoutines } from '../hooks/useRoutine';
@@ -162,43 +162,20 @@ export default function RewardsScreen() {
 
   if (loading || !profile) {
     return (
-      <View style={styles.root}>
-        <Stack.Screen
-          options={{
-            headerTitle: 'Rewards',
-            headerTitleAlign: 'center',
-            headerStyle: { backgroundColor: colors.morningBg },
-            headerShadowVisible: false,
-            headerTintColor: colors.textInk,
-            headerTitleStyle: { color: colors.textInk, fontWeight: '700', fontSize: fs(17) },
-          }}
-        />
-        <CloudsBackground />
-        <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-          <View style={styles.loadingContainer}>
-            <Text style={styles.loadingText}>Loading rewards...</Text>
-          </View>
-        </SafeAreaView>
-      </View>
+      <PageBackground variant="clouds">
+        <Stack.Screen options={getNativeHeaderOptions('Rewards')} />
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>Loading rewards...</Text>
+        </View>
+      </PageBackground>
     );
   }
 
   const totalStars = profile.totalStarsEarned ?? 0;
 
   return (
-    <View style={styles.root}>
-      <Stack.Screen
-        options={{
-          headerTitle: `${profile.childName}'s Rewards`,
-          headerTitleAlign: 'center',
-          headerStyle: { backgroundColor: colors.morningBg },
-          headerShadowVisible: false,
-          headerTintColor: colors.textInk,
-          headerTitleStyle: { color: colors.textInk, fontWeight: '700', fontSize: fs(17) },
-        }}
-      />
-      <CloudsBackground />
-      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+    <PageBackground variant="clouds">
+      <Stack.Screen options={getNativeHeaderOptions(`${profile.childName}'s Rewards`)} />
       <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
         <StarBank totalStars={totalStars} />
 
@@ -224,20 +201,11 @@ export default function RewardsScreen() {
           <Text style={styles.infoText}>Complete your morning and evening tasks to earn stars and unlock new levels!</Text>
         </View>
       </ScrollView>
-      </SafeAreaView>
-    </View>
+    </PageBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: colors.morningBg,
-  },
-  container: {
-    flex: 1,
-    backgroundColor: 'transparent',
-  },
   scroll: {
     flex: 1,
     backgroundColor: 'transparent',
