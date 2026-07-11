@@ -18,6 +18,7 @@ import { saveRoutine } from '../../hooks/useRoutine';
 import { scheduleRoutineNotification } from '../../services/notifications';
 import { syncRoutineAssets } from '../../services/assetSync';
 import { ensureAudioForRoutine } from '../../services/tts';
+import { ensureNameAudioReady } from '../../services/nameAudio';
 import { ChildProfile, Routine, ActivityKey } from '../../types';
 import { ACTIVITIES, ACTIVITY_KEYS } from '../../constants/activities';
 import { db, ensureAuth } from '../../services/firebase';
@@ -495,6 +496,11 @@ export default function CreateRoutineScreen() {
 
       await saveChildProfile(updatedProfile);
       await saveUserProfileDoc(updatedProfile);
+
+      // Ensure the personalized name-audio clip exists for this child (background, non-blocking).
+      ensureNameAudioReady(updatedProfile.childName).catch((err) => {
+        console.warn('[CreateRoutine] name audio preload failed:', err);
+      });
 
       setDrafts(cloneDrafts(nextDrafts));
       setOriginalDrafts(cloneDrafts(nextDrafts));

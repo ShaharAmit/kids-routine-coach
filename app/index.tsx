@@ -22,6 +22,7 @@ import { useLocalDailyCompletion } from '../hooks/useLocalDailyCompletion';
 import { useUserRoutines } from '../hooks/useRoutine';
 import { subscribeAssetCacheStatus } from '../services/assetCacheService';
 import { areAssetsReady, syncRoutineAssets } from '../services/assetSync';
+import { ensureNameAudioReady } from '../services/nameAudio';
 import { ensureAuth } from '../services/firebase';
 import { getHomeBootstrapSnapshot, isRoutineWarmed, markRoutineWarmed } from '../services/homeBootstrap';
 import { setHomeViewMode } from '../services/homeViewState';
@@ -35,27 +36,53 @@ import { colors, fs, ms, ROUNDED_FONT, s, vs } from '../theme';
 
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-const TASK_IMAGES: Record<string, ReturnType<typeof require>> = {
+const ACTIVITY_IMAGES: Record<string, ReturnType<typeof require>> = {
   brush_teeth: require('../assets/images/tooth_brush.png'),
-  bed_time: require('../assets/images/bed_time.png'),
-  put_on_pajamas: require('../assets/images/put_on_pajamas.png'),
-  read_book: require('../assets/images/read_book.png'),
+  get_dressed: require('../assets/images/get_dressed.png'),
+  eat_breakfast: require('../assets/images/eat_breakfast.png'),
+  pack_backpack: require('../assets/images/pack_backpack.png'),
+  wash_face: require('../assets/images/wash_face.png'),
+  comb_hair: require('../assets/images/comb_hair.png'),
+  put_shoes_on: require('../assets/images/put_shoes_on.png'),
   drink_water: require('../assets/images/drink_water.png'),
+  tidy_room: require('../assets/images/tidy_room.png'),
+  take_shower: require('../assets/images/take_shower.png'),
+  read_book: require('../assets/images/read_book.png'),
+  put_on_pajamas: require('../assets/images/put_on_pajamas.png'),
+  bedtime_story: require('../assets/images/read_book.png'),
+  eat_dinner: require('../assets/images/eat_dinner.png'),
+  go_to_sleep: require('../assets/images/go_to_sleep.png'),
+  homework: require('../assets/images/homework.png'),
+  make_bed: require('../assets/images/make_bed.png'),
+  wake_up: require('../assets/images/wake_up.png'),
 };
 
-const TASK_FALLBACK_IMAGE = require('../assets/images/sun.png');
+const ACTIVITY_FALLBACK_IMAGE = require('../assets/images/sun.png');
 
-const TASK_SUBTITLES: Record<string, string> = {
+const ACTIVITY_SUBTITLES: Record<string, string> = {
   brush_teeth: "Let's make those teeth sparkle!",
-  get_dressed: 'Time for comfy cozy clothes',
-  put_on_pajamas: 'Time for comfy cozy clothes',
+  get_dressed: "Time to put on comfy clothes",
+  eat_breakfast: "Time to fuel up for the day!",
+  pack_backpack: "Let's get ready for school!",
+  wash_face: "A splash of water to wake up!",
+  comb_hair: "Let's look neat and tidy!",
+  put_shoes_on: "Let's get those shoes on!",
+  drink_water: "A little sip for sweet dreams",
+  tidy_room: "Let's clean up our space!",
+  take_shower: "Time to wash and relax!",
   read_book: "Let's go on an adventure!",
-  drink_water: 'A little sip for sweet dreams',
+  put_on_pajamas: "Time to get cozy for bed",
+  bedtime_story: "Let's read a cozy story",
+  eat_dinner: "Yummy food to end the day!",
+  go_to_sleep: "Sweet dreams, sleep tight!",
+  homework: "Time to focus and learn!",
+  make_bed: "Let's make the bed nice and neat",
+  wake_up: "Good morning, rise and shine!",
 };
 
-const TASK_FALLBACK_SUBTITLE = 'Close your eyes and rest';
+const ACTIVITY_FALLBACK_SUBTITLE = 'Close your eyes and rest';
 
-function routineHasTasksInSegment(routine: Routine, segment: 'morning' | 'evening'): boolean {
+function routineHasActivitiesInSegment(routine: Routine, segment: 'morning' | 'evening'): boolean {
   return routine.activityStack.some((_, index) => {
     const time = routine.stepTimes?.[index] ?? routine.scheduledTime;
     const stepIsMorning = isMorningTime(time);
@@ -69,8 +96,8 @@ function pickPrimaryRoutine(
 ): Routine | null {
   if (routines.length === 0) return null;
 
-  const withSegmentTasks = routines.find((routine) => routineHasTasksInSegment(routine, segment));
-  if (withSegmentTasks) return withSegmentTasks;
+  const withSegmentActivities = routines.find((routine) => routineHasActivitiesInSegment(routine, segment));
+  if (withSegmentActivities) return withSegmentActivities;
 
   return routines[0];
 }
@@ -82,7 +109,7 @@ export default function HomeScreen() {
   const [userId, setUserId] = useState('');
   const [cacheStage, setCacheStage] = useState('idle');
   const [segment, setSegment] = useState<'morning' | 'evening'>(getCurrentSegment());
-  const [viewMode, setViewMode] = useState<'tasks' | 'player'>('tasks');
+  const [viewMode, setViewMode] = useState<'activities' | 'player'>('activities');
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [assetsReady, setAssetsReady] = useState(false);
   const [trophyVisible, setTrophyVisible] = useState(false);
@@ -221,13 +248,13 @@ export default function HomeScreen() {
   }, [navigation, segment]);
 
   // Let the root layout know when the full-screen activity player is active so it can hide
-  // the moon/sun decoration (which should only float over the task list, not the video).
+  // the moon/sun decoration (which should only float over the activities list, not the video).
   useEffect(() => {
     setHomeViewMode(viewMode);
   }, [viewMode]);
 
   useEffect(() => {
-    return () => setHomeViewMode('tasks');
+    return () => setHomeViewMode('activities');
   }, []);
 
   const visibleStepIndexes = useMemo(() => {
@@ -270,6 +297,13 @@ export default function HomeScreen() {
 
     async function prepareAssets() {
       setAssetsReady(false);
+
+      // Warm the personalized name-audio clip alongside routine assets so the overlay is ready
+      // even after a cache clear (existence-guarded, non-blocking).
+      ensureNameAudioReady(routine.childName).catch((err) =>
+        console.warn('[Home] Name audio warm failed:', err)
+      );
+
       try {
         if (isRoutineWarmed(routine.id)) {
           setAssetsReady(true);
@@ -376,9 +410,9 @@ export default function HomeScreen() {
     const newlyCompleted = await markStepDone(segment, currentStepId, visibleStepIndexes.length);
 
     // Star awarding now happens in the allScopedDone effect,
-    // so we don't award here anymore. Just mark the step done and switch back to tasks view.
+    // so we don't award here anymore. Just mark the step done and switch back to activities view.
     if (newlyCompleted) {
-      setViewMode('tasks');
+      setViewMode('activities');
     }
   }, [primaryRoutine, visibleStepIndexes, markStepDone, segment, currentStepIndex]);
 
@@ -422,8 +456,8 @@ export default function HomeScreen() {
     <View style={[styles.container, isEvening ? styles.containerEvening : styles.containerMorning]}>
       <StatusBar barStyle={isEvening ? 'light-content' : 'dark-content'} />
 
-      {viewMode === 'tasks' ? (
-        <View style={styles.tasksContainer}>
+      {viewMode === 'activities' ? (
+        <View style={styles.activitiesContainer}>
           {isEvening ? (
             <>
               <StarsBackground />
@@ -435,8 +469,8 @@ export default function HomeScreen() {
           )}
 
           <SafeAreaView style={styles.safeContent} edges={['bottom']}>
-           <View style={styles.tasksHeader}>
-             <Text style={[styles.tasksProgress, !isEvening && styles.tasksProgressMorning]}>
+           <View style={styles.activitiesHeader}>
+             <Text style={[styles.activitiesProgress, !isEvening && styles.activitiesProgressMorning]}>
                {completedCount} / {visibleStepIndexes.length}
              </Text>
               {cacheStage === 'warming-assets' ? (
@@ -448,37 +482,37 @@ export default function HomeScreen() {
 
             <View style={styles.cardWrap}>
               <View style={[styles.card, !isEvening && styles.cardMorning]}>
-              <ScrollView contentContainerStyle={styles.tasksList} showsVerticalScrollIndicator={false}>
+              <ScrollView contentContainerStyle={styles.activitiesList} showsVerticalScrollIndicator={false}>
                 {visibleStepIndexes.map((index, listIdx) => {
                   const step = primaryRoutine.activityStack[index] ?? [];
                   const metas = step.map((key) => ACTIVITIES[key]).filter(Boolean);
-                  const primaryLabel = metas[0]?.label ?? 'Task';
+                  const primaryLabel = metas[0]?.label ?? 'Activity';
                   const stepId = primaryRoutine.stepIds?.[index] ?? `step_${index}`;
                   const done = completedStepIds.has(stepId);
                   const primaryActivityKey = step[0] ?? '';
-                  const taskImage = TASK_IMAGES[primaryActivityKey] ?? TASK_FALLBACK_IMAGE;
-                  const taskSubtitle = TASK_SUBTITLES[primaryActivityKey] ?? TASK_FALLBACK_SUBTITLE;
+                  const activityImage = ACTIVITY_IMAGES[primaryActivityKey] ?? ACTIVITY_FALLBACK_IMAGE;
+                  const activitySubtitle = ACTIVITY_SUBTITLES[primaryActivityKey] ?? ACTIVITY_FALLBACK_SUBTITLE;
 
                   return (
                     <TouchableOpacity
                       key={`segment-step-${index}`}
-                      style={[styles.taskCard, done && styles.taskCardDone]}
+                      style={[styles.activityCard, done && styles.activityCardDone]}
                       activeOpacity={0.9}
                       onPress={() => {
                         setCurrentStepIndex(index);
                         setViewMode('player');
                       }}
                     >
-                      <View style={styles.taskImageWrap}>
-                        <Image source={taskImage} style={styles.taskImage} resizeMode="contain" />
+                      <View style={styles.activityImageWrap}>
+                        <Image source={activityImage} style={styles.activityImage} resizeMode="contain" />
                       </View>
 
-                      <View style={styles.taskTextWrap}>
-                        <Text style={styles.taskTitle} numberOfLines={1}>
+                      <View style={styles.activityTextWrap}>
+                        <Text style={styles.activityTitle} numberOfLines={1}>
                           {listIdx + 1}. {primaryLabel}
                         </Text>
-                        <Text style={styles.taskSubtitle} numberOfLines={1}>
-                          {taskSubtitle}
+                        <Text style={styles.activitySubtitle} numberOfLines={1}>
+                          {activitySubtitle}
                         </Text>
                       </View>
 
@@ -525,11 +559,11 @@ export default function HomeScreen() {
           />
 
           <TouchableOpacity
-            style={styles.backToTasksBtn}
-            onPress={() => setViewMode('tasks')}
+            style={styles.backToActivitiesBtn}
+            onPress={() => setViewMode('activities')}
             activeOpacity={0.9}
           >
-            <Text style={styles.backToTasksText}>‹ Back</Text>
+            <Text style={styles.backToActivitiesText}>‹ Back</Text>
           </TouchableOpacity>
         </>
       ) : null}
@@ -540,10 +574,10 @@ export default function HomeScreen() {
           <Text style={styles.loadingText}>Preparing media...</Text>
           <TouchableOpacity
             style={[styles.primaryButton, { marginTop: vs(14) }]}
-            onPress={() => setViewMode('tasks')}
+            onPress={() => setViewMode('activities')}
             activeOpacity={0.9}
           >
-            <Text style={styles.primaryButtonText}>Back To Tasks</Text>
+            <Text style={styles.primaryButtonText}>Back To Activities</Text>
           </TouchableOpacity>
         </View>
       ) : null}
@@ -553,12 +587,12 @@ export default function HomeScreen() {
           <View style={styles.trophyCard}>
             <Text style={styles.trophyEmoji}>🏆</Text>
             <Text style={styles.trophyTitle}>Amazing, {primaryRoutine.childName}!</Text>
-            <Text style={styles.trophySub}>You finished all {segment} tasks.</Text>
+            <Text style={styles.trophySub}>You finished all {segment} activities.</Text>
             <TouchableOpacity
               style={styles.primaryButton}
               onPress={() => {
                 setTrophyVisible(false);
-                setViewMode('tasks');
+                setViewMode('activities');
               }}
             >
               <Text style={styles.primaryButtonText}>Great Job</Text>
@@ -604,7 +638,7 @@ const styles = StyleSheet.create({
     color: '#6A6A6A',
     textAlign: 'center',
   },
-  tasksContainer: {
+  activitiesContainer: {
     flex: 1,
   },
   safeContent: {
@@ -626,13 +660,13 @@ const styles = StyleSheet.create({
     height: s(104),
     zIndex: 7!,
   },
-  tasksHeader: {
+  activitiesHeader: {
     alignItems: 'center',
     paddingTop: vs(12),
     paddingBottom: vs(6),
     paddingHorizontal: s(16),
   },
-  tasksTitle: {
+  activitiesTitle: {
     fontSize: fs(44),
     lineHeight: fs(48),
     fontWeight: '800',
@@ -640,25 +674,25 @@ const styles = StyleSheet.create({
     color: colors.eveningTitle,
     fontFamily: roundedFontBold ?? 'System',
   },
-  tasksTitleMorning: {
+  activitiesTitleMorning: {
     color: colors.morningTitle,
   },
-  tasksSubtitle: {
+  activitiesSubtitle: {
     marginTop: vs(4),
     fontSize: fs(30),
     color: colors.eveningSubtitle,
     fontFamily: roundedFontBold ?? 'System',
   },
-  tasksSubtitleMorning: {
+  activitiesSubtitleMorning: {
     color: colors.morningSubtitle,
   },
-  tasksProgress: {
+  activitiesProgress: {
     marginTop: vs(6),
     fontSize: fs(15),
     color: '#8E9CC4',
     fontWeight: '600',
   },
-  tasksProgressMorning: {
+  activitiesProgressMorning: {
     color: '#4E73A0',
   },
   prepBadge: {
@@ -697,12 +731,12 @@ const styles = StyleSheet.create({
   cardMorning: {
     backgroundColor: colors.white,
   },
-  tasksList: {
+  activitiesList: {
     paddingHorizontal: s(14),
     paddingTop: vs(8),
     paddingBottom: vs(96),
   },
-  taskCard: {
+  activityCard: {
     backgroundColor: colors.white,
     borderRadius: ms(20),
     marginBottom: vs(12),
@@ -714,31 +748,31 @@ const styles = StyleSheet.create({
     borderColor: colors.morningCardBorder,
     borderStyle: 'dashed',
   },
-  taskCardDone: {
+  activityCardDone: {
     backgroundColor: '#F4FBF5',
     borderColor: '#BFE3CF',
   },
-  taskImageWrap: {
+  activityImageWrap: {
     width: s(60),
     height: s(60),
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: s(12),
   },
-  taskImage: {
+  activityImage: {
     width: s(56),
     height: s(56),
   },
-  taskTextWrap: {
+  activityTextWrap: {
     flex: 1,
     minWidth: 0,
   },
-  taskTitle: {
+  activityTitle: {
     fontSize: fs(21),
     color: '#1F4A52',
     fontFamily: roundedFontBold ?? 'System',
   },
-  taskSubtitle: {
+  activitySubtitle: {
     marginTop: vs(3),
     fontSize: fs(14),
     color: '#5E8A86',
@@ -768,7 +802,7 @@ const styles = StyleSheet.create({
   checkTextDone: {
     color: colors.success,
   },
-  backToTasksBtn: {
+  backToActivitiesBtn: {
     position: 'absolute',
     left: s(16),
     top: vs(12),
@@ -782,7 +816,7 @@ const styles = StyleSheet.create({
     shadowRadius: ms(6),
     shadowOffset: { width: 0, height: vs(2) },
   },
-  backToTasksText: {
+  backToActivitiesText: {
     fontSize: fs(15),
     fontWeight: '700',
     color: colors.white,

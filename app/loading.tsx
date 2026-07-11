@@ -9,6 +9,7 @@ import {
 } from '../services/assetCacheService';
 import { getPaidStatus } from '../services/subscription';
 import { getChildProfile, hasCompletedOnboarding } from '../services/profile';
+import { ensureNameAudioReady } from '../services/nameAudio';
 import { Routine } from '../types';
 import { hasDebugHomeAccess } from '../services/debugFlow';
 import { getHomeBootstrapSnapshot, primeHomeBootstrap } from '../services/homeBootstrap';
@@ -61,6 +62,15 @@ export default function LoadingScreen() {
         const isPaid = await getPaidStatus();
 
         const onboardingDone = await hasCompletedOnboarding();
+
+        // Ensure the personalized name-audio clip is present locally (existence-guarded,
+        // non-blocking). Runs on every cold start once a child profile exists.
+        getChildProfile()
+          .then((p) => {
+            if (p?.childName) return ensureNameAudioReady(p.childName);
+            return null;
+          })
+          .catch((err) => console.warn('[Loading] Name audio preload failed:', err));
 
         if (onboardingDone && isPaid) {
           setStage('Loading your routines...');

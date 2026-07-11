@@ -136,7 +136,7 @@ export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       {/* Moon/Sun decoration - positioned between header and content - only on routines tab's task list */}
-      {pathname === '/' && showDecorations && homeViewMode === 'tasks' && (
+      {pathname === '/' && showDecorations && homeViewMode === 'activities' && (
         <View style={{ position: 'absolute', right: s(16), top: vs(80), zIndex: 50, pointerEvents: 'none' }}>
           {segment === 'evening' ? (
             <Image

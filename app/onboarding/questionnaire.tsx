@@ -32,6 +32,7 @@ import { saveRoutine, saveRoutineIfMissing } from '../../hooks/useRoutine';
 import { scheduleRoutineNotification } from '../../services/notifications';
 import { saveChildProfile, getChildProfile, saveUserProfileDoc } from '../../services/profile';
 import { preloadRoutineAssetsInBackground } from '../../services/assetCacheService';
+import { ensureNameAudioReady } from '../../services/nameAudio';
 import { grantDebugHomeAccess } from '../../services/debugFlow';
 import { calculateAgeFromISO, formatBirthDate, getTodayISO, isoDateYearsAgo } from '../../utils/date';
 import { colors, fs, ms, s, vs } from '../../theme';
@@ -225,6 +226,11 @@ export default function QuestionnaireScreen() {
 
       await saveChildProfile(profile);
       await saveUserProfileDoc(profile);
+
+      // Generate/download the personalized name-audio clip in the background (existence-guarded).
+      ensureNameAudioReady(profile.childName).catch((err) => {
+        console.warn('[Questionnaire] name audio preload failed:', err);
+      });
       const morningCreated = await saveRoutineIfMissing(morningRoutine);
       await saveRoutineIfMissing(eveningRoutine);
       if (morningCreated) {

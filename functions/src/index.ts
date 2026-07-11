@@ -38,6 +38,16 @@ interface GenerateTTSResponse {
   cacheKey: string;
 }
 
+interface GenerateNameAudioRequest {
+  childName: string;
+}
+
+interface GenerateNameAudioResponse {
+  audioUrl: string | null;
+  cacheKey: string;
+  status: 'ready' | 'generating';
+}
+
 interface SubmitEarlyAccessLeadRequest {
   email: string;
 }
@@ -124,6 +134,28 @@ function buildTonePrompt(tone: GenerateTTSRequest['tone'], text: string): string
 
 function mapVoiceToGemini(voice: GenerateTTSRequest['voice']): string {
   return voice === 'man' ? 'Kore' : 'Aoede';
+}
+
+/** Normalize a child name into a cache-key-safe token. Mirrors the client normalizer. */
+function normalizeNameToken(childName: string): string {
+  return childName.trim().toLowerCase().replace(/[^a-z0-9]/g, '_');
+}
+
+/** Firestore/Storage cache key for the reusable per-child name clip. */
+function buildNameAudioKey(childName: string): string {
+  return `name_${normalizeNameToken(childName)}_encouraging`;
+}
+
+/**
+ * Validate a generated WAV buffer server-side: a minimal RIFF/WAVE header plus enough
+ * audio payload to be a real clip (guards against empty / malformed synthesis output).
+ */
+function isValidWavBuffer(buffer: Buffer): boolean {
+  const MIN_WAV_BYTES = 1024; // header (44B) + a small amount of PCM
+  if (buffer.length < MIN_WAV_BYTES) return false;
+  if (buffer.toString('ascii', 0, 4) !== 'RIFF') return false;
+  if (buffer.toString('ascii', 8, 12) !== 'WAVE') return false;
+  return true;
 }
 
 function normalizeEmail(value: string): string {
@@ -271,6 +303,147 @@ export const generateRoutineAudio = onCall(
           fs.unlinkSync(tmpFilePath);
         } catch (cleanupErr) {
           console.warn('[generateRoutineAudio] Temp cleanup failed:', cleanupErr);
+        }
+      }
+    }
+  });
+
+/**
+ * Firebase Cloud Function: generateNameAudio
+ *
+ * Generates a single reusable "encouraging name" TTS clip (e.g. "Lia") that is overlaid on
+ * avatar videos in place of the mis-recorded baked-in name. Globally cached by name so it is
+ * only ever generated once. Race-safe via a Firestore transaction that writes
+ * status:'generating' before synthesizing.
+ *
+ * Input: { childName }
+ * Output: { audioUrl, cacheKey, status }
+ */
+export const generateNameAudio = onCall(
+  { timeoutSeconds: 120, memory: '512MiB' },
+  async (
+    request: CallableRequest<GenerateNameAudioRequest>
+  ): Promise<GenerateNameAudioResponse> => {
+    const childName = (request.data?.childName ?? '').trim();
+
+    if (!childName) {
+      throw new HttpsError('invalid-argument', 'Missing required field: childName');
+    }
+    if (childName.length > 60) {
+      throw new HttpsError('invalid-argument', 'childName exceeds maximum length of 60 characters.');
+    }
+
+    const cacheKey = buildNameAudioKey(childName);
+    const cacheRef = db.collection('audio_cache').doc(cacheKey);
+
+    // Race-condition guard: claim generation atomically.
+    const claim = await db.runTransaction(async (tx) => {
+      const snap = await tx.get(cacheRef);
+      const data = snap.data();
+
+      if (snap.exists && data?.status === 'ready' && data?.audioUrl) {
+        return { action: 'ready' as const, audioUrl: data.audioUrl as string };
+      }
+
+      if (snap.exists && data?.status === 'generating') {
+        return { action: 'in-progress' as const };
+      }
+
+      tx.set(
+        cacheRef,
+        {
+          id: cacheKey,
+          status: 'generating',
+          type: 'name',
+          text: childName,
+          childName,
+          tone: 'encouraging',
+          voice: 'woman',
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      return { action: 'generate' as const };
+    });
+
+    if (claim.action === 'ready') {
+      return { audioUrl: claim.audioUrl, cacheKey, status: 'ready' };
+    }
+    if (claim.action === 'in-progress') {
+      return { audioUrl: null, cacheKey, status: 'generating' };
+    }
+
+    let tmpFilePath: string | null = null;
+    try {
+      const rawPcmBuffer = await synthesizeWithGeminiTts(childName, 'encouraging', 'woman');
+      const audioBuffer = pcm16ToWav(rawPcmBuffer);
+
+      // Server-side WAV validation (client only checks file existence, per design).
+      if (!isValidWavBuffer(audioBuffer)) {
+        throw new Error('Generated audio failed WAV validation.');
+      }
+
+      const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      tmpFilePath = path.join(os.tmpdir(), `${cacheKey}-${uniqueSuffix}.wav`);
+      fs.writeFileSync(tmpFilePath, audioBuffer);
+
+      const bucket = admin.storage().bucket();
+      const storagePath = `audio/${cacheKey}.wav`;
+
+      await bucket.upload(tmpFilePath, {
+        destination: storagePath,
+        metadata: {
+          contentType: 'audio/wav',
+          metadata: {
+            childName,
+            type: 'name',
+            ttsProvider: 'gemini',
+            ttsModel: geminiModel,
+            ttsVoice: 'Aoede',
+            ttsTone: 'encouraging',
+            generatedAt: new Date().toISOString(),
+          },
+        },
+      });
+
+      const file = bucket.file(storagePath);
+      await file.makePublic();
+      const audioUrl = `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
+
+      await cacheRef.set(
+        {
+          id: cacheKey,
+          audioUrl,
+          status: 'ready',
+          type: 'name',
+          text: childName,
+          childName,
+          tone: 'encouraging',
+          voice: 'woman',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+      console.info(`[generateNameAudio] Generated: ${cacheKey}`);
+      return { audioUrl, cacheKey, status: 'ready' };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      console.error(`[generateNameAudio] Error for ${cacheKey}:`, message);
+
+      // Clear the 'generating' claim so a later attempt can retry.
+      await cacheRef.set(
+        { status: 'error', updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+        { merge: true }
+      );
+
+      throw new HttpsError('internal', `Name audio generation failed: ${message}`);
+    } finally {
+      if (tmpFilePath && fs.existsSync(tmpFilePath)) {
+        try {
+          fs.unlinkSync(tmpFilePath);
+        } catch (cleanupErr) {
+          console.warn('[generateNameAudio] Temp cleanup failed:', cleanupErr);
         }
       }
     }

@@ -4,9 +4,9 @@
  * activity player, without needing a React context. The decoration should only ever appear
  * over the task list — not floating on top of the avatar video during a mission.
  */
-type HomeViewMode = 'tasks' | 'player';
+type HomeViewMode = 'activities' | 'player';
 
-let currentMode: HomeViewMode = 'tasks';
+let currentMode: HomeViewMode = 'activities';
 const listeners = new Set<(mode: HomeViewMode) => void>();
 
 export function setHomeViewMode(mode: HomeViewMode): void {

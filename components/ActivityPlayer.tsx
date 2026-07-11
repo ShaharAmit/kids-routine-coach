@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback, useState } from 'react';
+import React, { useEffect, useCallback, useRef, useState } from 'react';
 import { StyleSheet, View, Text, TouchableOpacity, Dimensions, ScrollView } from 'react-native';
 import { VideoView, useVideoPlayer, VideoSize } from 'expo-video';
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
@@ -6,7 +6,10 @@ import { ActivityStep, CaptionCue } from '../types';
 import { ACTIVITIES } from '../constants/activities';
 import { TTS_AUDIO_ENABLED } from '../constants/featureFlags';
 import { localVideoPath, localAudioPath, buildAudioCacheKey, ensureCaptionsData } from '../services/assetSync';
+import { getReadyNameAudioPath, ensureNameAudioReady } from '../services/nameAudio';
 import { colors, fs, ms, s, vs } from '../theme';
+
+const NAME_CUE_PATTERN = /\{\{\s*name\s*\}\}/i;
 
 interface ActivityPlayerProps {
   activityStep: ActivityStep;
@@ -43,23 +46,19 @@ export default function ActivityPlayer({
   const [aspectRatio, setAspectRatio] = useState(DEFAULT_ASPECT_RATIO);
   const [captionCues, setCaptionCues] = useState<CaptionCue[] | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
+  const [nameAudioUri, setNameAudioUri] = useState<string | null>(null);
 
   const currentActivityKey = activityStep[activityIndex];
   const activity = ACTIVITIES[currentActivityKey];
 
   const videoUri = localVideoPath(currentActivityKey, avatarId);
 
-  // Load timed caption cues for this activity when subtitles are toggled on. Downloads on demand
-  // rather than relying solely on the home screen's best-effort background backfill.
+  // Load timed caption cues for this activity ALWAYS (independent of the subtitles toggle).
+  // The cues drive both the optional visual caption bar AND the name-audio overlay timing, so
+  // name audio must work whether subtitles are OFF or ON. `showCaptions` only gates the visual.
   useEffect(() => {
     let cancelled = false;
     setCaptionCues(null);
-
-    if (!showCaptions) {
-      return () => {
-        cancelled = true;
-      };
-    }
 
     ensureCaptionsData(currentActivityKey, avatarId).then((cues) => {
       if (!cancelled) setCaptionCues(cues);
@@ -68,7 +67,29 @@ export default function ActivityPlayer({
     return () => {
       cancelled = true;
     };
-  }, [currentActivityKey, avatarId, showCaptions]);
+  }, [currentActivityKey, avatarId]);
+
+  // Resolve the child's name-audio clip. Fast path: use it if already cached locally. Otherwise
+  // self-heal by downloading it (e.g. after the parent cleared cached media) so the overlay works
+  // without waiting for the next cold start or questionnaire save.
+  useEffect(() => {
+    let cancelled = false;
+
+    getReadyNameAudioPath(childName).then((uri) => {
+      if (cancelled) return;
+      if (uri) {
+        setNameAudioUri(uri);
+        return;
+      }
+      ensureNameAudioReady(childName).then((downloadedUri) => {
+        if (!cancelled) setNameAudioUri(downloadedUri);
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [childName]);
 
   useEffect(() => {
     setAspectRatio(DEFAULT_ASPECT_RATIO);
@@ -92,6 +113,10 @@ export default function ActivityPlayer({
   // useAudioPlayer auto-manages lifecycle; component remounts per step via key prop
   const audioPlayer = useAudioPlayer(audioUri, { updateInterval: 250 });
   const audioStatus = useAudioPlayerStatus(audioPlayer);
+
+  // Personalized name clip overlaid during {{name}} cue windows (may be null if not cached yet).
+  const nameAudioPlayer = useAudioPlayer(nameAudioUri, { updateInterval: 250 });
+  const nameCueIndexRef = useRef<number | null>(null);
 
   // Configure audio session once for consistent playback in silent mode.
   useEffect(() => {
@@ -146,8 +171,54 @@ export default function ActivityPlayer({
     audioPlayer.play();
   }, [audioPlayer, audioStatus.isLoaded, audioStatus.playing]);
 
+  // Reset the name-overlay state whenever the active activity changes (multi-activity steps).
+  useEffect(() => {
+    nameCueIndexRef.current = null;
+    try {
+      videoPlayer.muted = false;
+    } catch {
+      // no-op
+    }
+  }, [currentActivityKey, videoPlayer]);
+
+  // Overlay the personalized name clip during {{name}} cue windows. Works whether subtitles are
+  // ON or OFF — driven purely by cue timings, not the visual caption bar. During a name cue we
+  // mute the video's baked-in (mis-recorded) name and play the child's real name; we unmute once
+  // the cue window ends. Name-only cues swap cleanly; name-in-sentence cues go silent around it.
+  useEffect(() => {
+    if (!nameAudioUri || !captionCues) return;
+
+    const idx = captionCues.findIndex(
+      (cue) => currentTime >= cue.start && currentTime < cue.end && NAME_CUE_PATTERN.test(cue.text)
+    );
+
+    if (idx !== -1 && nameCueIndexRef.current !== idx) {
+      nameCueIndexRef.current = idx;
+      try {
+        videoPlayer.muted = true;
+        nameAudioPlayer.seekTo(0);
+        nameAudioPlayer.play();
+      } catch {
+        // no-op
+      }
+    } else if (idx === -1 && nameCueIndexRef.current !== null) {
+      nameCueIndexRef.current = null;
+      try {
+        videoPlayer.muted = false;
+      } catch {
+        // no-op
+      }
+    }
+  }, [currentTime, captionCues, nameAudioUri, nameAudioPlayer, videoPlayer]);
+
   const handleRetryVideo = useCallback(async () => {
     setVideoEnded(false);
+    nameCueIndexRef.current = null;
+    try {
+      videoPlayer.muted = false;
+    } catch {
+      // no-op
+    }
     videoPlayer.replay();
 
     if (TTS_AUDIO_ENABLED && audioStatus.isLoaded) {
