@@ -22,7 +22,6 @@ import { useLocalDailyCompletion } from '../hooks/useLocalDailyCompletion';
 import { useUserRoutines } from '../hooks/useRoutine';
 import { subscribeAssetCacheStatus } from '../services/assetCacheService';
 import { areAssetsReady, syncRoutineAssets } from '../services/assetSync';
-import { ensureNameAudioReady } from '../services/nameAudio';
 import { ensureAuth } from '../services/firebase';
 import { getHomeBootstrapSnapshot, isRoutineWarmed, markRoutineWarmed } from '../services/homeBootstrap';
 import { setHomeViewMode } from '../services/homeViewState';
@@ -46,7 +45,6 @@ const ACTIVITY_IMAGES: Record<string, ReturnType<typeof require>> = {
   put_shoes_on: require('../assets/images/put_shoes_on.png'),
   drink_water: require('../assets/images/drink_water.png'),
   tidy_room: require('../assets/images/tidy_room.png'),
-  take_shower: require('../assets/images/take_shower.png'),
   read_book: require('../assets/images/read_book.png'),
   put_on_pajamas: require('../assets/images/put_on_pajamas.png'),
   bedtime_story: require('../assets/images/read_book.png'),
@@ -69,7 +67,6 @@ const ACTIVITY_SUBTITLES: Record<string, string> = {
   put_shoes_on: "Let's get those shoes on!",
   drink_water: "A little sip for sweet dreams",
   tidy_room: "Let's clean up our space!",
-  take_shower: "Time to wash and relax!",
   read_book: "Let's go on an adventure!",
   put_on_pajamas: "Time to get cozy for bed",
   bedtime_story: "Let's read a cozy story",
@@ -297,12 +294,6 @@ export default function HomeScreen() {
 
     async function prepareAssets() {
       setAssetsReady(false);
-
-      // Warm the personalized name-audio clip alongside routine assets so the overlay is ready
-      // even after a cache clear (existence-guarded, non-blocking).
-      ensureNameAudioReady(routine.childName).catch((err) =>
-        console.warn('[Home] Name audio warm failed:', err)
-      );
 
       try {
         if (isRoutineWarmed(routine.id)) {
@@ -548,10 +539,10 @@ export default function HomeScreen() {
       {viewMode === 'player' && assetsReady ? (
         <>
           <ActivityPlayer
-            key={currentStepIndex}
+            key={`${primaryRoutine.id}_${currentStepIndex}_${(currentActivityStep || []).join('_')}`}
             activityStep={currentActivityStep}
-            childName={primaryRoutine.childName}
-            avatarId={primaryRoutine.avatarId}
+            childName={primaryRoutine.childName || ''}
+            avatarId={primaryRoutine.avatarId || 'becky'}
             stepNumber={scopedPosition + 1}
             totalSteps={visibleStepIndexes.length}
             showCaptions={showCaptions}

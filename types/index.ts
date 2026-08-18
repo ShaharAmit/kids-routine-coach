@@ -8,7 +8,6 @@ export type ActivityKey =
   | 'put_shoes_on'
   | 'drink_water'
   | 'tidy_room'
-  | 'take_shower'
   | 'read_book'
   | 'put_on_pajamas'
   | 'bedtime_story'

@@ -20,7 +20,7 @@ Notifications.setNotificationHandler({
  */
 export async function requestNotificationPermissions(): Promise<boolean> {
   if (!Device.isDevice) {
-    console.warn('Push notifications only work on physical devices.');
+    console.log('[Notifications] Push notifications skipped (simulator/emulator environment).');
     return false;
   }
 

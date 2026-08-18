@@ -241,7 +241,7 @@ export default function RootLayout() {
             name="parent/create"
             options={{
               href: null,
-              title: 'Add Activity',
+              title: 'Activity Manager',
               headerStyle: { backgroundColor: '#F5F7FA' },
               headerTintColor: colors.textInk,
             }}

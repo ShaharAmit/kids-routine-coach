@@ -1,15 +1,21 @@
-import React, { useEffect, useCallback, useRef, useState } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, Dimensions, ScrollView } from 'react-native';
+import React, { useEffect, useCallback, useMemo, useRef, useState } from 'react';
+import {
+  StyleSheet,
+  View,
+  Text,
+  TouchableOpacity,
+  Dimensions,
+  ScrollView,
+  ActivityIndicator,
+} from 'react-native';
 import { VideoView, useVideoPlayer, VideoSize } from 'expo-video';
-import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
-import { ActivityStep, CaptionCue } from '../types';
+import { setAudioModeAsync } from 'expo-audio';
+import { ActivityKey, ActivityStep, CaptionCue } from '../types';
 import { ACTIVITIES } from '../constants/activities';
-import { TTS_AUDIO_ENABLED } from '../constants/featureFlags';
-import { localVideoPath, localAudioPath, buildAudioCacheKey, ensureCaptionsData } from '../services/assetSync';
-import { getReadyNameAudioPath, ensureNameAudioReady } from '../services/nameAudio';
+import { isValidCachedVideo, ensureActivityVideoReady } from '../services/assetSync';
+import { getOrBuildMergedCaptions, localPart2VideoPath } from '../services/twoPartVideoService';
+import { getReadyMergedVideoPath, ensureMergedActivityVideo } from '../services/videoMerge';
 import { colors, fs, ms, s, vs } from '../theme';
-
-const NAME_CUE_PATTERN = /\{\{\s*name\s*\}\}/i;
 
 interface ActivityPlayerProps {
   activityStep: ActivityStep;
@@ -24,12 +30,133 @@ interface ActivityPlayerProps {
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const CONTAINER_WIDTH = SCREEN_WIDTH * 0.8;
 const MAX_CONTAINER_HEIGHT = SCREEN_HEIGHT * 0.55;
-// All avatar clips are currently recorded in 9:16 portrait; used until the real size loads.
 const DEFAULT_ASPECT_RATIO = 9 / 16;
 
 function clampContainerHeight(aspectRatio: number): number {
   const idealHeight = CONTAINER_WIDTH / aspectRatio;
   return Math.min(idealHeight, MAX_CONTAINER_HEIGHT);
+}
+
+/**
+ * What this step will actually play.
+ *
+ * `merged` is the intended path for every authored activity: one pre-built file containing the
+ * personalized Part 1 greeting (dubbed with this child's TTS) immediately followed by the Part 2
+ * activity clip. `single` is the degraded path used only when no Part 1 clip is authored (or the
+ * merge genuinely failed) — Part 2 alone, which carries its own baked-in narration.
+ */
+type ResolvedSource =
+  | { kind: 'merged'; uri: string }
+  | { kind: 'single'; uri: string }
+  | { kind: 'unavailable' };
+
+interface VideoStageProps {
+  uri: string;
+  showCaptions: boolean;
+  captionCues: CaptionCue[] | null;
+  onEnded: () => void;
+}
+
+/**
+ * Owns exactly one `expo-video` player bound to exactly one file for its entire lifetime.
+ *
+ * This component is always mounted with a `key` derived from `uri`, so a different source
+ * produces a brand new component instance and therefore a brand new native player whose
+ * *initial* source is already the file we want. That is deliberate and load-bearing: swapping a
+ * live player's source via `replaceAsync()` was the cause of the "audio plays but the picture is
+ * frozen on the previous clip's last frame" bug. After a swap the native player kept reporting
+ * the previous item's state — `duration` returned the old asset's length, `playToEnd` fired
+ * immediately for the old item, and the attached surface never redrew (remounting just the
+ * VideoView did not help, because the stale object is the player, not the view). Creating the
+ * player already pointed at the right file avoids that failure mode entirely.
+ */
+function VideoStage({ uri, showCaptions, captionCues, onEnded }: VideoStageProps) {
+  const [aspectRatio, setAspectRatio] = useState(DEFAULT_ASPECT_RATIO);
+  const [currentTime, setCurrentTime] = useState(0);
+
+  const onEndedRef = useRef(onEnded);
+  useEffect(() => {
+    onEndedRef.current = onEnded;
+  }, [onEnded]);
+
+  const player = useVideoPlayer(uri, (p: ReturnType<typeof useVideoPlayer>) => {
+    p.loop = false;
+    // The merged file carries the dubbed greeting AND the Part 2 narration on a single audio
+    // track; the Part-2-only fallback carries its own narration. Either way: never muted, and
+    // never a second audio player to keep in sync.
+    p.muted = false;
+    p.timeUpdateEventInterval = 0.05;
+    p.play();
+  });
+
+  useEffect(() => {
+    setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: false }).catch((err) =>
+      console.warn('[ActivityPlayer] Failed to set audio mode:', err)
+    );
+  }, []);
+
+  useEffect(() => {
+    const endSub = player.addListener('playToEnd', () => {
+      console.log('[ActivityPlayer] playToEnd', uri);
+      onEndedRef.current();
+    });
+
+    const statusSub = player.addListener('statusChange', (status) => {
+      const st = status as unknown as { status?: string; error?: unknown };
+      if (st?.error || st?.status === 'error') {
+        console.warn('[ActivityPlayer] video error:', status);
+      }
+    });
+
+    const trackSub = player.addListener('videoTrackChange', ({ videoTrack }) => {
+      const size = videoTrack?.size as VideoSize | undefined;
+      if (size && size.width > 0 && size.height > 0) {
+        setAspectRatio(size.width / size.height);
+      }
+    });
+
+    const timeSub = player.addListener('timeUpdate', ({ currentTime: t }) => {
+      setCurrentTime(t);
+    });
+
+    return () => {
+      endSub.remove();
+      statusSub.remove();
+      trackSub.remove();
+      timeSub.remove();
+      try {
+        player.pause();
+      } catch {
+        // Player already released by the time this instance unmounted.
+      }
+    };
+  }, [player, uri]);
+
+  // The merged captions track was built against this exact file during the merge, so raw player
+  // time maps straight onto its cue offsets — no Part 1 duration correction needed.
+  const activeCaptionText = useMemo(() => {
+    if (!captionCues) return null;
+    return (
+      captionCues.find((cue) => currentTime >= cue.start && currentTime < cue.end)?.text ?? null
+    );
+  }, [captionCues, currentTime]);
+
+  return (
+    <View
+      style={[
+        styles.videoContainer,
+        { width: CONTAINER_WIDTH, height: clampContainerHeight(aspectRatio) },
+      ]}
+    >
+      <VideoView player={player} style={styles.video} contentFit="cover" nativeControls={false} />
+
+      {showCaptions && activeCaptionText ? (
+        <View style={styles.captionBar} pointerEvents="none">
+          <Text style={styles.captionText}>{activeCaptionText}</Text>
+        </View>
+      ) : null}
+    </View>
+  );
 }
 
 export default function ActivityPlayer({
@@ -43,209 +170,114 @@ export default function ActivityPlayer({
 }: ActivityPlayerProps) {
   const [activityIndex, setActivityIndex] = useState(0);
   const [videoEnded, setVideoEnded] = useState(false);
-  const [aspectRatio, setAspectRatio] = useState(DEFAULT_ASPECT_RATIO);
   const [captionCues, setCaptionCues] = useState<CaptionCue[] | null>(null);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [nameAudioUri, setNameAudioUri] = useState<string | null>(null);
+  const [resolved, setResolved] = useState<ResolvedSource | null>(null);
+  // Bumped by "Retry Video". Because it is part of the VideoStage key, retrying tears the player
+  // down and builds a fresh one on the same file rather than seeking a possibly-stale instance.
+  const [retryNonce, setRetryNonce] = useState(0);
 
-  const currentActivityKey = activityStep[activityIndex];
-  const activity = ACTIVITIES[currentActivityKey];
+  const normalizedSteps = useMemo(() => {
+    if (Array.isArray(activityStep)) {
+      return activityStep.filter((k): k is ActivityKey => typeof k === 'string' && k.length > 0);
+    }
+    if (typeof activityStep === 'string' && (activityStep as string).length > 0) {
+      return [activityStep as ActivityKey];
+    }
+    return [] as ActivityKey[];
+  }, [activityStep]);
 
-  const videoUri = localVideoPath(currentActivityKey, avatarId);
+  const currentActivityKey = normalizedSteps[activityIndex] ?? normalizedSteps[0] ?? 'brush_teeth';
+  const activity = ACTIVITIES[currentActivityKey] ?? ACTIVITIES['brush_teeth'];
+  const safeChildName = (childName || 'friend').trim() || 'friend';
+  const safeAvatarId = (avatarId || 'becky').trim() || 'becky';
 
-  // Load timed caption cues for this activity ALWAYS (independent of the subtitles toggle).
-  // The cues drive both the optional visual caption bar AND the name-audio overlay timing, so
-  // name audio must work whether subtitles are OFF or ON. `showCaptions` only gates the visual.
+  // Resolve the single file this activity will play BEFORE any player exists. The merge normally
+  // ran during asset preload (assetCacheService -> ensureRoutineMergedVideosReady), so the first
+  // lookup is just a cache hit; ensureMergedActivityVideo() is the on-demand catch-up for a step
+  // opened before preload finished.
   useEffect(() => {
     let cancelled = false;
+    setResolved(null);
     setCaptionCues(null);
-
-    ensureCaptionsData(currentActivityKey, avatarId).then((cues) => {
-      if (!cancelled) setCaptionCues(cues);
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [currentActivityKey, avatarId]);
-
-  // Resolve the child's name-audio clip. Fast path: use it if already cached locally. Otherwise
-  // self-heal by downloading it (e.g. after the parent cleared cached media) so the overlay works
-  // without waiting for the next cold start or questionnaire save.
-  useEffect(() => {
-    let cancelled = false;
-
-    getReadyNameAudioPath(childName).then((uri) => {
-      if (cancelled) return;
-      if (uri) {
-        setNameAudioUri(uri);
-        return;
-      }
-      ensureNameAudioReady(childName).then((downloadedUri) => {
-        if (!cancelled) setNameAudioUri(downloadedUri);
-      });
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [childName]);
-
-  useEffect(() => {
-    setAspectRatio(DEFAULT_ASPECT_RATIO);
-  }, [currentActivityKey]);
-
-  const activeCaption = captionCues?.find((cue) => currentTime >= cue.start && currentTime < cue.end) ?? null;
-  const activeCaptionText = activeCaption ? activeCaption.text.replace(/\{\{\s*name\s*\}\}/gi, childName) : null;
-
-  const cacheKey = buildAudioCacheKey(childName, currentActivityKey, avatarId);
-  // Personalized TTS narration is currently disabled — the avatar videos already carry their own
-  // baked-in audio track, so we don't load a separate overlay track (see featureFlags.ts).
-  const audioUri = TTS_AUDIO_ENABLED ? localAudioPath(cacheKey) : null;
-
-  const videoPlayer = useVideoPlayer(videoUri, (p: ReturnType<typeof useVideoPlayer>) => {
-    p.loop = false;
-    p.muted = false; // avatar videos carry their own narration audio
-    p.timeUpdateEventInterval = 0.2; // needed for smoothly synced caption cues
-    p.play();
-  });
-
-  // useAudioPlayer auto-manages lifecycle; component remounts per step via key prop
-  const audioPlayer = useAudioPlayer(audioUri, { updateInterval: 250 });
-  const audioStatus = useAudioPlayerStatus(audioPlayer);
-
-  // Personalized name clip overlaid during {{name}} cue windows (may be null if not cached yet).
-  const nameAudioPlayer = useAudioPlayer(nameAudioUri, { updateInterval: 250 });
-  const nameCueIndexRef = useRef<number | null>(null);
-
-  // Configure audio session once for consistent playback in silent mode.
-  useEffect(() => {
-    setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: false }).catch((err) =>
-      console.warn('[ActivityPlayer] Failed to set audio mode:', err)
-    );
-
-    const videoEndSub = videoPlayer.addListener('playToEnd', () => {
-      setVideoEnded(true);
-      if (TTS_AUDIO_ENABLED) audioPlayer.pause();
-    });
-
-    const trackChangeSub = videoPlayer.addListener('videoTrackChange', ({ videoTrack }) => {
-      const size = videoTrack?.size as VideoSize | undefined;
-      if (size && size.width > 0 && size.height > 0) {
-        setAspectRatio(size.width / size.height);
-      }
-    });
-
-    const timeUpdateSub = videoPlayer.addListener('timeUpdate', ({ currentTime: time }) => {
-      setCurrentTime(time);
-    });
-
-    return () => {
-      videoEndSub.remove();
-      trackChangeSub.remove();
-      timeUpdateSub.remove();
-
-      // On fast screen unmounts, native media objects can already be released.
-      try {
-        if (TTS_AUDIO_ENABLED) audioPlayer.pause();
-      } catch {
-        // no-op
-      }
-
-      try {
-        videoPlayer.pause();
-      } catch {
-        // no-op
-      }
-    };
-  }, [audioPlayer, videoPlayer]);
-
-  // Start TTS overlay playback only after the source is loaded (no-op while disabled).
-  useEffect(() => {
-    if (!TTS_AUDIO_ENABLED) return;
-    if (!audioStatus.isLoaded || audioStatus.playing) return;
-
-    audioPlayer.loop = false;
-    audioPlayer.muted = false;
-    audioPlayer.volume = 1;
-    audioPlayer.play();
-  }, [audioPlayer, audioStatus.isLoaded, audioStatus.playing]);
-
-  // Reset the name-overlay state whenever the active activity changes (multi-activity steps).
-  useEffect(() => {
-    nameCueIndexRef.current = null;
-    try {
-      videoPlayer.muted = false;
-    } catch {
-      // no-op
-    }
-  }, [currentActivityKey, videoPlayer]);
-
-  // Overlay the personalized name clip during {{name}} cue windows. Works whether subtitles are
-  // ON or OFF — driven purely by cue timings, not the visual caption bar. During a name cue we
-  // mute the video's baked-in (mis-recorded) name and play the child's real name; we unmute once
-  // the cue window ends. Name-only cues swap cleanly; name-in-sentence cues go silent around it.
-  useEffect(() => {
-    if (!nameAudioUri || !captionCues) return;
-
-    const idx = captionCues.findIndex(
-      (cue) => currentTime >= cue.start && currentTime < cue.end && NAME_CUE_PATTERN.test(cue.text)
-    );
-
-    if (idx !== -1 && nameCueIndexRef.current !== idx) {
-      nameCueIndexRef.current = idx;
-      try {
-        videoPlayer.muted = true;
-        nameAudioPlayer.seekTo(0);
-        nameAudioPlayer.play();
-      } catch {
-        // no-op
-      }
-    } else if (idx === -1 && nameCueIndexRef.current !== null) {
-      nameCueIndexRef.current = null;
-      try {
-        videoPlayer.muted = false;
-      } catch {
-        // no-op
-      }
-    }
-  }, [currentTime, captionCues, nameAudioUri, nameAudioPlayer, videoPlayer]);
-
-  const handleRetryVideo = useCallback(async () => {
     setVideoEnded(false);
-    nameCueIndexRef.current = null;
-    try {
-      videoPlayer.muted = false;
-    } catch {
-      // no-op
-    }
-    videoPlayer.replay();
 
-    if (TTS_AUDIO_ENABLED && audioStatus.isLoaded) {
-      try {
-        await audioPlayer.seekTo(0);
-      } catch {
-        // If seek fails for any reason, still attempt fresh playback.
+    async function resolveSource() {
+      let mergedUri = await getReadyMergedVideoPath(
+        currentActivityKey,
+        safeChildName,
+        safeAvatarId
+      );
+      if (cancelled) return;
+
+      if (!mergedUri) {
+        console.log(
+          `[ActivityPlayer] merged video not cached for ${currentActivityKey} — building now`
+        );
+        try {
+          mergedUri = await ensureMergedActivityVideo(
+            currentActivityKey,
+            safeChildName,
+            safeAvatarId
+          );
+        } catch (err) {
+          console.warn(`[ActivityPlayer] on-demand merge failed for ${currentActivityKey}:`, err);
+          mergedUri = null;
+        }
+        if (cancelled) return;
       }
-      audioPlayer.play();
+
+      if (mergedUri) {
+        console.log(`[ActivityPlayer] playing merged video for ${currentActivityKey}: ${mergedUri}`);
+        setResolved({ kind: 'merged', uri: mergedUri });
+      } else {
+        // No merge available (activity has no authored Part 1, or the merge failed). Fall back to
+        // the Part 2 clip on its own — it has baked-in narration, so it is still a usable step.
+        const p2Uri = localPart2VideoPath(currentActivityKey, safeAvatarId);
+        let p2Ready = await isValidCachedVideo(p2Uri);
+        if (!p2Ready) {
+          const repaired = await ensureActivityVideoReady(currentActivityKey, safeAvatarId);
+          p2Ready = repaired.p2Ready;
+        }
+        if (cancelled) return;
+        console.warn(
+          `[ActivityPlayer] no merged video for ${currentActivityKey} — falling back to Part 2 only (ready=${p2Ready})`
+        );
+        setResolved(p2Ready ? { kind: 'single', uri: p2Uri } : { kind: 'unavailable' });
+      }
+
+      const cues = await getOrBuildMergedCaptions(
+        currentActivityKey,
+        safeChildName,
+        safeAvatarId,
+        0
+      );
+      if (!cancelled) setCaptionCues(cues);
     }
-  }, [audioPlayer, audioStatus.isLoaded, videoPlayer]);
+
+    resolveSource();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentActivityKey, safeChildName, safeAvatarId]);
+
+  const handleVideoEnded = useCallback(() => {
+    setVideoEnded(true);
+  }, []);
+
+  const handleRetryVideo = useCallback(() => {
+    setVideoEnded(false);
+    setRetryNonce((n) => n + 1);
+  }, []);
 
   const handleComplete = useCallback(() => {
-    try {
-      if (TTS_AUDIO_ENABLED) audioPlayer.pause();
-    } catch {
-      // no-op
-    }
-
-    if (activityIndex < activityStep.length - 1) {
+    if (activityIndex < normalizedSteps.length - 1) {
       setVideoEnded(false);
       setActivityIndex((prev) => prev + 1);
       return;
     }
-
     onComplete();
-  }, [activityIndex, activityStep.length, audioPlayer, onComplete]);
+  }, [activityIndex, normalizedSteps.length, onComplete]);
 
   if (!activity) return null;
 
@@ -273,9 +305,9 @@ export default function ActivityPlayer({
         Step {stepNumber} of {totalSteps}
       </Text>
 
-      {activityStep.length > 1 ? (
+      {normalizedSteps.length > 1 ? (
         <Text style={styles.subCounter}>
-          Part {activityIndex + 1} of {activityStep.length}
+          Part {activityIndex + 1} of {normalizedSteps.length}
         </Text>
       ) : null}
 
@@ -283,26 +315,33 @@ export default function ActivityPlayer({
       <Text style={styles.emoji}>{activity.emoji}</Text>
       <Text style={[styles.activityLabel, { color: activity.color }]}>{activity.label}</Text>
 
-      {/* Avatar video loop */}
-      <View
-        style={[
-          styles.videoContainer,
-          { width: CONTAINER_WIDTH, height: clampContainerHeight(aspectRatio) },
-        ]}
-      >
-        <VideoView
-          player={videoPlayer}
-          style={styles.video}
-          contentFit="cover"
-          nativeControls={false}
+      {/* Avatar video — one player, one file, created already pointed at that file */}
+      {resolved && resolved.kind !== 'unavailable' ? (
+        <VideoStage
+          key={`${resolved.uri}#${retryNonce}`}
+          uri={resolved.uri}
+          showCaptions={showCaptions}
+          captionCues={captionCues}
+          onEnded={handleVideoEnded}
         />
-
-        {showCaptions && activeCaptionText ? (
-          <View style={styles.captionBar} pointerEvents="none">
-            <Text style={styles.captionText}>{activeCaptionText}</Text>
-          </View>
-        ) : null}
-      </View>
+      ) : (
+        <View
+          style={[
+            styles.videoContainer,
+            styles.videoPlaceholder,
+            { width: CONTAINER_WIDTH, height: clampContainerHeight(DEFAULT_ASPECT_RATIO) },
+          ]}
+        >
+          {resolved?.kind === 'unavailable' ? (
+            <Text style={styles.placeholderText}>Video unavailable</Text>
+          ) : (
+            <>
+              <ActivityIndicator size="large" color={activity.color} />
+              <Text style={styles.placeholderText}>Getting your video ready…</Text>
+            </>
+          )}
+        </View>
+      )}
 
       {videoEnded && (
         <TouchableOpacity
@@ -324,7 +363,7 @@ export default function ActivityPlayer({
         activeOpacity={0.85}
       >
         <Text style={styles.doneButtonText}>
-          {activityIndex < activityStep.length - 1
+          {activityIndex < normalizedSteps.length - 1
             ? '➡️ Next Activity'
             : stepNumber === totalSteps
               ? '🎉 All Done!'
@@ -389,6 +428,17 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: ms(12),
     shadowOffset: { width: s(0), height: vs(4) },
+  },
+  videoPlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: vs(12),
+  },
+  placeholderText: {
+    fontSize: fs(15),
+    color: '#777',
+    fontWeight: '600',
+    textAlign: 'center',
   },
   video: {
     width: '100%',

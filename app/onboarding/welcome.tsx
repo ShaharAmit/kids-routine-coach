@@ -71,7 +71,9 @@ function WelcomeVideoPlayer({ videoPath, posterUri, onEnded }: WelcomeVideoPlaye
       if (videoSub) videoSub.remove();
       if (statusSub) statusSub.remove();
       try {
-        videoPlayer.pause();
+        if (videoPlayer?.playing) {
+          videoPlayer.pause();
+        }
       } catch {
         // no-op
       }

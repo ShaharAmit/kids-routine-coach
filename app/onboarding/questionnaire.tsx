@@ -17,6 +17,7 @@ import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/dat
 import PageBackground from '../../components/PageBackground';
 import { InPageHeader } from '../../components/ScreenHeader';
 import {
+  ActivityKey,
   ChildProfile,
   HelpLevel,
   MasteredTask,
@@ -32,7 +33,6 @@ import { saveRoutine, saveRoutineIfMissing } from '../../hooks/useRoutine';
 import { scheduleRoutineNotification } from '../../services/notifications';
 import { saveChildProfile, getChildProfile, saveUserProfileDoc } from '../../services/profile';
 import { preloadRoutineAssetsInBackground } from '../../services/assetCacheService';
-import { ensureNameAudioReady } from '../../services/nameAudio';
 import { grantDebugHomeAccess } from '../../services/debugFlow';
 import { calculateAgeFromISO, formatBirthDate, getTodayISO, isoDateYearsAgo } from '../../utils/date';
 import { colors, fs, ms, s, vs } from '../../theme';
@@ -44,12 +44,98 @@ const DEFAULT_VOICE = 'woman' as const;
 const DEFAULT_SCHEDULED_TIME = '08:00';
 const DEFAULT_EVENING_TIME = '19:00';
 
-/** Default activities kept in local child profile for first-time UX only. */
-const DEFAULT_ACTIVITY_STACK = [['get_dressed'], ['brush_teeth'], ['eat_breakfast']] as const;
-const DEFAULT_STEP_TIMES = ['07:30', '07:45', '08:00'];
-
 const MIN_AGE = 2;
 const MAX_AGE = 12;
+
+type AgeBucket = 'toddlers' | 'kindergarten' | 'school';
+
+const AGE_ROUTINE_TEMPLATES: Record<
+  AgeBucket,
+  { morning: ActivityKey[]; evening: ActivityKey[] }
+> = {
+  toddlers: {
+    morning: [
+      'wake_up',
+      'drink_water',
+      'brush_teeth',
+      'get_dressed',
+      'put_shoes_on',
+      'eat_breakfast',
+    ],
+    evening: [
+      'tidy_room',
+      'eat_dinner',
+      'put_on_pajamas',
+      'bedtime_story',
+      'go_to_sleep',
+    ],
+  },
+  kindergarten: {
+    morning: [
+      'wake_up',
+      'drink_water',
+      'wash_face',
+      'brush_teeth',
+      'comb_hair',
+      'get_dressed',
+      'put_shoes_on',
+      'pack_backpack',
+      'eat_breakfast',
+    ],
+    evening: [
+      'tidy_room',
+      'eat_dinner',
+      'put_on_pajamas',
+      'read_book',
+      'bedtime_story',
+      'go_to_sleep',
+    ],
+  },
+  school: {
+    morning: [
+      'wake_up',
+      'drink_water',
+      'wash_face',
+      'brush_teeth',
+      'comb_hair',
+      'get_dressed',
+      'put_shoes_on',
+      'make_bed',
+      'pack_backpack',
+      'eat_breakfast',
+    ],
+    evening: [
+      'homework',
+      'tidy_room',
+      'eat_dinner',
+      'put_on_pajamas',
+      'read_book',
+      'bedtime_story',
+      'go_to_sleep',
+    ],
+  },
+};
+
+function bucketFromAge(age: number): AgeBucket {
+  if (age <= 3) return 'toddlers';
+  if (age <= 5) return 'kindergarten';
+  return 'school';
+}
+
+function buildStepTimes(startTime: string, count: number, intervalMinutes = 10): string[] {
+  const [hoursRaw, minutesRaw] = startTime.split(':');
+  const hours = Number(hoursRaw);
+  const minutes = Number(minutesRaw);
+  const startMinutes =
+    Number.isFinite(hours) && Number.isFinite(minutes) ? hours * 60 + minutes : 8 * 60;
+
+  return Array.from({ length: count }, (_, index) => {
+    const total = (startMinutes + index * intervalMinutes) % (24 * 60);
+    const hh = String(Math.floor(total / 60)).padStart(2, '0');
+    const mm = String(total % 60).padStart(2, '0');
+    return `${hh}:${mm}`;
+  });
+}
 
 type Option<T extends string> = { key: T; label: string };
 
@@ -180,7 +266,12 @@ export default function QuestionnaireScreen() {
       const user = await ensureAuth();
       const userId = user.uid;
       const tone = toneFromMotivation(answers.motivationStyle);
-      const activityStack = DEFAULT_ACTIVITY_STACK.map((step) => [...step]);
+      const ageBucket = bucketFromAge(age);
+      const routineTemplate = AGE_ROUTINE_TEMPLATES[ageBucket];
+      const morningActivityStack = routineTemplate.morning.map((key) => [key]);
+      const eveningActivityStack = routineTemplate.evening.map((key) => [key]);
+      const morningStepTimes = buildStepTimes(DEFAULT_SCHEDULED_TIME, morningActivityStack.length);
+      const eveningStepTimes = buildStepTimes(DEFAULT_EVENING_TIME, eveningActivityStack.length);
 
       const profile: ChildProfile = {
         userId,
@@ -192,8 +283,8 @@ export default function QuestionnaireScreen() {
         voice: DEFAULT_VOICE,
         tone,
         scheduledTime: DEFAULT_SCHEDULED_TIME,
-        activityStack,
-        stepTimes: [...DEFAULT_STEP_TIMES],
+        activityStack: morningActivityStack,
+        stepTimes: morningStepTimes,
         answers,
         totalStarsEarned: 0,
         updatedAt: Date.now(),
@@ -206,8 +297,8 @@ export default function QuestionnaireScreen() {
         childAge: age,
         avatarId: DEFAULT_AVATAR_ID,
         scheduledTime: DEFAULT_SCHEDULED_TIME,
-        activityStack,
-        stepTimes: [...DEFAULT_STEP_TIMES],
+        activityStack: morningActivityStack,
+        stepTimes: morningStepTimes,
         tone,
         voice: DEFAULT_VOICE,
       };
@@ -218,8 +309,8 @@ export default function QuestionnaireScreen() {
         childAge: age,
         avatarId: DEFAULT_AVATAR_ID,
         scheduledTime: DEFAULT_EVENING_TIME,
-        activityStack: [],
-        stepTimes: [],
+        activityStack: eveningActivityStack,
+        stepTimes: eveningStepTimes,
         tone,
         voice: DEFAULT_VOICE,
       };
@@ -227,23 +318,16 @@ export default function QuestionnaireScreen() {
       await saveChildProfile(profile);
       await saveUserProfileDoc(profile);
 
-      // Generate/download the personalized name-audio clip in the background (existence-guarded).
-      ensureNameAudioReady(profile.childName).catch((err) => {
-        console.warn('[Questionnaire] name audio preload failed:', err);
-      });
       const morningCreated = await saveRoutineIfMissing(morningRoutine);
       await saveRoutineIfMissing(eveningRoutine);
       if (morningCreated) {
         const notificationId = await scheduleRoutineNotification(morningRoutine);
         const routineWithNotif: Routine = { ...morningRoutine, notificationId };
         await saveRoutine(routineWithNotif);
-        preloadRoutineAssetsInBackground(routineWithNotif).catch((err) => {
-          console.warn('[Questionnaire] background preloading failed:', err);
-        });
       }
       grantDebugHomeAccess();
 
-      router.replace('/');
+      router.replace({ pathname: '/loading', params: { mode: 'generating_experience' } } as never);
     } catch (err) {
       console.warn('[Questionnaire] failed to save:', err);
       Alert.alert('Save failed', 'Could not save setup. Please try again.');

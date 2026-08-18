@@ -48,6 +48,35 @@ interface GenerateNameAudioResponse {
   status: 'ready' | 'generating';
 }
 
+interface GeneratePart1AudioRequest {
+  childName: string;
+  activityKey: string;
+  tone?: 'cheerful' | 'encouraging' | 'calm';
+  voice?: 'woman' | 'man';
+}
+
+interface GeneratePart1AudioResponse {
+  audioUrl: string | null;
+  cacheKey: string;
+  status: 'ready' | 'generating';
+}
+
+interface GenerateRoutinePart1AudioRequest {
+  childName: string;
+  activityKeys: string[];
+  tone?: 'cheerful' | 'encouraging' | 'calm';
+  voice?: 'woman' | 'man';
+}
+
+interface GenerateRoutinePart1AudioResponse {
+  results: Array<{
+    activityKey: string;
+    audioUrl: string | null;
+    cacheKey: string;
+    status: 'ready' | 'generating';
+  }>;
+}
+
 interface SubmitEarlyAccessLeadRequest {
   email: string;
 }
@@ -144,6 +173,37 @@ function normalizeNameToken(childName: string): string {
 /** Firestore/Storage cache key for the reusable per-child name clip. */
 function buildNameAudioKey(childName: string): string {
   return `name_${normalizeNameToken(childName)}_encouraging`;
+}
+
+const PART1_TEMPLATES: Record<string, { prompt: 'encouraging' | 'calm' | 'cheerful'; textTemplate: string }> = {
+  wake_up: { prompt: 'encouraging', textTemplate: 'Good morning, {name}!' },
+  make_bed: { prompt: 'encouraging', textTemplate: 'Good morning, {name}!' },
+  brush_teeth: { prompt: 'encouraging', textTemplate: 'Toothbrush time, {name}!' },
+  eat_breakfast: { prompt: 'encouraging', textTemplate: 'Breakfast time, {name}!' },
+  get_dressed: { prompt: 'encouraging', textTemplate: "Let's get dressed, {name}!" },
+  put_shoes_on: { prompt: 'encouraging', textTemplate: 'All right, {name}!' },
+  comb_hair: { prompt: 'encouraging', textTemplate: "Let's take care of your hair, {name}!" },
+  drink_water: { prompt: 'encouraging', textTemplate: 'Water time, {name}!' },
+  homework: { prompt: 'encouraging', textTemplate: 'All right, {name}!' },
+  eat_dinner: { prompt: 'calm', textTemplate: 'Dinner time, {name}!' },
+  tidy_room: { prompt: 'encouraging', textTemplate: 'What a busy day of playing, {name}!' },
+  put_on_pajamas: { prompt: 'calm', textTemplate: 'Time to transform for the night, {name}!' },
+  bedtime_story: { prompt: 'calm', textTemplate: 'Story time, {name}.' },
+  go_to_sleep: { prompt: 'calm', textTemplate: 'You did it, {name}.' },
+};
+
+function buildPart1AudioKey(
+  activityKey: string,
+  childName: string,
+  tone?: 'cheerful' | 'encouraging' | 'calm',
+  voice?: 'woman' | 'man'
+): string {
+  const normalizedName = normalizeNameToken(childName);
+  const normalizedActivity = activityKey.trim().toLowerCase().replace(/[^a-z0-9]/g, '_');
+  const template = PART1_TEMPLATES[activityKey];
+  const selectedTone = tone ?? template?.prompt ?? 'encouraging';
+  const selectedVoice = voice ?? 'woman';
+  return `p1_${normalizedActivity}_${normalizedName}_${selectedTone}_${selectedVoice}`;
 }
 
 /**
@@ -448,6 +508,224 @@ export const generateNameAudio = onCall(
       }
     }
   });
+
+/**
+ * Internal helper to generate or fetch Part 1 TTS audio for a specific activity & child name.
+ */
+async function generatePart1AudioInternal(
+  childName: string,
+  activityKey: string,
+  tone?: 'cheerful' | 'encouraging' | 'calm',
+  voice?: 'woman' | 'man'
+): Promise<{ audioUrl: string | null; cacheKey: string; status: 'ready' | 'generating' }> {
+  const trimmedName = childName.trim();
+  const template = PART1_TEMPLATES[activityKey];
+  if (!template) {
+    throw new HttpsError('invalid-argument', `Unknown activityKey: ${activityKey}`);
+  }
+
+  const selectedTone = tone ?? template.prompt ?? 'encouraging';
+  const selectedVoice = voice ?? 'woman';
+  const spokenText = template.textTemplate.replace(/\{name\}/g, trimmedName);
+  const cacheKey = buildPart1AudioKey(activityKey, trimmedName, selectedTone, selectedVoice);
+  const cacheRef = db.collection('audio_cache').doc(cacheKey);
+
+  // Race-condition guard: claim generation atomically.
+  const claim = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(cacheRef);
+    const data = snap.data();
+
+    if (snap.exists && data?.status === 'ready' && data?.audioUrl) {
+      return { action: 'ready' as const, audioUrl: data.audioUrl as string };
+    }
+
+    if (snap.exists && data?.status === 'generating') {
+      return { action: 'in-progress' as const };
+    }
+
+    tx.set(
+      cacheRef,
+      {
+        id: cacheKey,
+        status: 'generating',
+        type: 'part1',
+        text: spokenText,
+        childName: trimmedName,
+        activityKey,
+        tone: selectedTone,
+        voice: selectedVoice,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    return { action: 'generate' as const };
+  });
+
+  if (claim.action === 'ready') {
+    return { audioUrl: claim.audioUrl, cacheKey, status: 'ready' };
+  }
+  if (claim.action === 'in-progress') {
+    return { audioUrl: null, cacheKey, status: 'generating' };
+  }
+
+  let tmpFilePath: string | null = null;
+  try {
+    const rawPcmBuffer = await synthesizeWithGeminiTts(spokenText, selectedTone, selectedVoice);
+    const audioBuffer = pcm16ToWav(rawPcmBuffer);
+
+    if (!isValidWavBuffer(audioBuffer)) {
+      throw new Error('Generated audio failed WAV validation.');
+    }
+
+    const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    tmpFilePath = path.join(os.tmpdir(), `${cacheKey}-${uniqueSuffix}.wav`);
+    fs.writeFileSync(tmpFilePath, audioBuffer);
+
+    const bucket = admin.storage().bucket();
+    const storagePath = `audio/${cacheKey}.wav`;
+
+    await bucket.upload(tmpFilePath, {
+      destination: storagePath,
+      metadata: {
+        contentType: 'audio/wav',
+        metadata: {
+          childName: trimmedName,
+          activityKey,
+          type: 'part1',
+          ttsProvider: 'gemini',
+          ttsModel: geminiModel,
+          ttsVoice: mapVoiceToGemini(selectedVoice),
+          ttsTone: selectedTone,
+          generatedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    const file = bucket.file(storagePath);
+    await file.makePublic();
+    const audioUrl = `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
+
+    await cacheRef.set(
+      {
+        id: cacheKey,
+        audioUrl,
+        status: 'ready',
+        type: 'part1',
+        text: spokenText,
+        childName: trimmedName,
+        activityKey,
+        tone: selectedTone,
+        voice: selectedVoice,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    console.info(`[generatePart1Audio] Generated: ${cacheKey}`);
+    return { audioUrl, cacheKey, status: 'ready' };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    console.error(`[generatePart1Audio] Error for ${cacheKey}:`, message);
+
+    await cacheRef.set(
+      { status: 'error', updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { merge: true }
+    );
+
+    throw new HttpsError('internal', `Part 1 audio generation failed: ${message}`);
+  } finally {
+    if (tmpFilePath && fs.existsSync(tmpFilePath)) {
+      try {
+        fs.unlinkSync(tmpFilePath);
+      } catch (cleanupErr) {
+        console.warn('[generatePart1Audio] Temp cleanup failed:', cleanupErr);
+      }
+    }
+  }
+}
+
+/**
+ * Firebase Cloud Function: generatePart1Audio
+ *
+ * Synthesizes and caches Part 1 greeting audio for an activity step and child name.
+ */
+export const generatePart1Audio = onCall(
+  { timeoutSeconds: 120, memory: '512MiB' },
+  async (
+    request: CallableRequest<GeneratePart1AudioRequest>
+  ): Promise<GeneratePart1AudioResponse> => {
+    const childName = (request.data?.childName ?? '').trim();
+    const activityKey = (request.data?.activityKey ?? '').trim();
+
+    if (!childName) {
+      throw new HttpsError('invalid-argument', 'Missing required field: childName');
+    }
+    if (!activityKey) {
+      throw new HttpsError('invalid-argument', 'Missing required field: activityKey');
+    }
+    if (childName.length > 60) {
+      throw new HttpsError('invalid-argument', 'childName exceeds maximum length of 60 characters.');
+    }
+
+    return generatePart1AudioInternal(
+      childName,
+      activityKey,
+      request.data?.tone,
+      request.data?.voice
+    );
+  }
+);
+
+/**
+ * Firebase Cloud Function: generateRoutinePart1Audio
+ *
+ * Batch synthesizes and caches Part 1 greeting audio for all activities in a routine.
+ */
+export const generateRoutinePart1Audio = onCall(
+  { timeoutSeconds: 120, memory: '512MiB' },
+  async (
+    request: CallableRequest<GenerateRoutinePart1AudioRequest>
+  ): Promise<GenerateRoutinePart1AudioResponse> => {
+    const childName = (request.data?.childName ?? '').trim();
+    const activityKeys = request.data?.activityKeys ?? [];
+
+    if (!childName) {
+      throw new HttpsError('invalid-argument', 'Missing required field: childName');
+    }
+    if (!Array.isArray(activityKeys) || activityKeys.length === 0) {
+      throw new HttpsError('invalid-argument', 'Missing or empty activityKeys array');
+    }
+
+    const results = await Promise.all(
+      activityKeys.map(async (activityKey) => {
+        try {
+          const res = await generatePart1AudioInternal(
+            childName,
+            activityKey,
+            request.data?.tone,
+            request.data?.voice
+          );
+          return {
+            activityKey,
+            audioUrl: res.audioUrl,
+            cacheKey: res.cacheKey,
+            status: res.status,
+          };
+        } catch (err) {
+          console.error(`[generateRoutinePart1Audio] Failed for ${activityKey}:`, err);
+          return {
+            activityKey,
+            audioUrl: null,
+            cacheKey: buildPart1AudioKey(activityKey, childName, request.data?.tone, request.data?.voice),
+            status: 'generating' as const,
+          };
+        }
+      })
+    );
+
+    return { results };
+  }
+);
 
 export const submitEarlyAccessLead = onCall(
   { cors: true },

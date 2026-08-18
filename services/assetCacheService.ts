@@ -3,9 +3,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getDownloadURL, getMetadata, ref } from 'firebase/storage';
 import { storage } from './firebase';
 import { ensureAudioForRoutine } from './tts';
+import { ensureRoutinePart1AudioReady } from './part1Audio';
 import { Routine } from '../types';
-import { clearAllRoutineAssets, syncRoutineAssets } from './assetSync';
+import { clearAllRoutineAssets, syncRoutineAssets, areAssetsReady } from './assetSync';
 import { clearHomeBootstrap, markRoutineWarmed } from './homeBootstrap';
+import { clearAllMergedVideos, ensureRoutineMergedVideosReady } from './videoMerge';
 
 const WELCOME_VIDEO_STORAGE_PATH = 'avatars/default/welcome.mp4';
 
@@ -99,28 +101,37 @@ function isSameRemoteVersion(
 }
 
 async function downloadOrRepairWelcomeVideo(remotePath: string, localPath: string): Promise<void> {
-  const remoteRef = ref(storage, remotePath);
-  const remoteMetaResponse = await getMetadata(remoteRef);
-
-  const remoteMeta: WelcomeVideoMetadata = {
-    generation: remoteMetaResponse.generation,
-    etag: remoteMetaResponse.md5Hash,
-    updated: remoteMetaResponse.updated,
-    size: remoteMetaResponse.size,
-  };
-
   const hasValidCachedVideo = await isValidCachedWelcomeVideo(localPath);
+
+  let remoteMeta: WelcomeVideoMetadata | null = null;
+  const remoteRef = ref(storage, remotePath);
+  try {
+    const remoteMetaResponse = await getMetadata(remoteRef);
+    remoteMeta = {
+      generation: remoteMetaResponse.generation,
+      etag: remoteMetaResponse.md5Hash,
+      updated: remoteMetaResponse.updated,
+      size: remoteMetaResponse.size,
+    };
+  } catch (err) {
+    // If offline or network error, keep using the valid cached video on device
+    if (hasValidCachedVideo) {
+      return;
+    }
+    throw err;
+  }
+
   const storedMeta = await readStoredWelcomeVideoMeta();
 
   const localInfo = await FileSystem.getInfoAsync(localPath);
   const localSize = 'size' in localInfo && typeof localInfo.size === 'number' ? localInfo.size : undefined;
-  const remoteSize = typeof remoteMeta.size !== 'undefined' ? Number(remoteMeta.size) : undefined;
+  const remoteSize = remoteMeta?.size !== undefined ? Number(remoteMeta.size) : undefined;
   const sizeMatches =
     typeof localSize === 'number' && typeof remoteSize === 'number'
       ? localSize === remoteSize
       : true;
 
-  const remoteUnchanged = isSameRemoteVersion(storedMeta, remoteMeta);
+  const remoteUnchanged = remoteMeta ? isSameRemoteVersion(storedMeta, remoteMeta) : false;
   if (hasValidCachedVideo && remoteUnchanged && sizeMatches) {
     return;
   }
@@ -145,7 +156,9 @@ async function downloadOrRepairWelcomeVideo(remotePath: string, localPath: strin
     throw new Error(`[WelcomeAssets] downloaded video is invalid or too small: ${remoteUrl}`);
   }
 
-  await writeStoredWelcomeVideoMeta(remoteMeta);
+  if (remoteMeta) {
+    await writeStoredWelcomeVideoMeta(remoteMeta);
+  }
 }
 
 export async function downloadWelcomeAssets(): Promise<{
@@ -187,10 +200,25 @@ export async function preloadRoutineAssetsInBackground(routine: Routine): Promis
   emitStatus();
 
   try {
-    await ensureAudioForRoutine(routine);
+    await Promise.allSettled([
+      ensureAudioForRoutine(routine),
+      ensureRoutinePart1AudioReady(routine),
+    ]);
     const result = await syncRoutineAssets(routine);
     status.ready = status.total - result.missingAudioKeys.length;
     markRoutineWarmed(routine.id, result.missingAudioKeys.length === 0);
+
+    // Build merged single-file videos (Part 1 [+ freeze-frame pad] + dubbed TTS + Part 2) for
+    // every activity now that sources are on disk. Best-effort — the player falls back to
+    // runtime two-part playback for any activity this doesn't finish in time.
+    const uniqueActivityKeys = Array.from(new Set(routine.activityStack.flat()));
+    ensureRoutineMergedVideosReady(
+      uniqueActivityKeys,
+      routine.childName,
+      routine.avatarId,
+      routine.tone,
+      routine.voice
+    ).catch(() => {});
   } catch {
     status.ready = 0;
     markRoutineWarmed(routine.id, false);
@@ -202,10 +230,99 @@ export async function preloadRoutineAssetsInBackground(routine: Routine): Promis
 }
 
 /**
+ * Fully warms and downloads all assets for given routine(s) to completion before proceeding.
+ * Does not resolve until all videos, captions, and Part 1 audio files exist on device storage.
+ * Skips redundant operations if all required assets already exist on device.
+ */
+export async function warmAllRoutineAssetsToCompletion(
+  routines: Routine[],
+  onProgress?: (stageText: string, progressPercent: number) => void
+): Promise<void> {
+  if (!routines || routines.length === 0) return;
+
+  status.stage = 'warming-assets';
+  emitStatus();
+
+  // Builds (or reuses) the merged single-file videos for every activity in every routine.
+  // Cheap when they're already current — `ensureMergedActivityVideo` short-circuits on a matching
+  // source signature — but essential to run on *every* path, including the fast path below:
+  // `areAssetsReady` only inspects the raw sources (videos/audio/captions) and knows nothing about
+  // merged output, so an early return would leave a stale or missing merge in place indefinitely
+  // (e.g. after a MERGE_PIPELINE_VERSION bump invalidates previously cached files).
+  const buildMergedVideos = async () => {
+    for (const r of routines) {
+      const uniqueActivityKeys = Array.from(new Set(r.activityStack.flat()));
+      await ensureRoutineMergedVideosReady(uniqueActivityKeys, r.childName, r.avatarId, r.tone, r.voice);
+    }
+  };
+
+  // Fast-path: Check if everything is already ready on disk
+  const readinessChecks = await Promise.all(routines.map((r) => areAssetsReady(r)));
+  const allAlreadyReady = readinessChecks.every(Boolean);
+
+  if (allAlreadyReady) {
+    await buildMergedVideos();
+    for (const r of routines) {
+      markRoutineWarmed(r.id, true);
+    }
+    status.stage = 'done';
+    emitStatus();
+    onProgress?.('Ready!', 100);
+    return;
+  }
+
+  onProgress?.('Generating personalized voice...', 60);
+
+  // 1. Request and wait for Part 1 greeting audio across all routines (skips cached keys)
+  for (let i = 0; i < routines.length; i++) {
+    const r = routines[i];
+    await ensureRoutinePart1AudioReady(r);
+  }
+
+  onProgress?.('Downloading routine videos and animations...', 75);
+
+  // 2. Download all missing routine assets (videos, captions, audio)
+  for (let i = 0; i < routines.length; i++) {
+    const r = routines[i];
+    await syncRoutineAssets(r);
+  }
+
+  onProgress?.('Finalizing experience on device...', 90);
+
+  // 3. Verification & retry loop (up to 4 attempts)
+  for (let attempt = 0; attempt < 4; attempt++) {
+    let allReady = true;
+    for (const r of routines) {
+      const ready = await areAssetsReady(r);
+      if (!ready) {
+        allReady = false;
+        await syncRoutineAssets(r);
+      }
+    }
+    if (allReady) break;
+    await new Promise((res) => setTimeout(res, 1200));
+  }
+
+  // 4. Build merged single-file videos for every activity so the routine plays with zero
+  // on-the-fly encoding. Best-effort — a routine whose merge isn't finished yet simply falls
+  // back to runtime two-part playback in ActivityPlayer.
+  await buildMergedVideos();
+
+  for (const r of routines) {
+    markRoutineWarmed(r.id, true);
+  }
+
+  status.stage = 'done';
+  emitStatus();
+  onProgress?.('Ready!', 100);
+}
+
+/**
  * Clears all locally cached media and metadata.
  */
 export async function clearAllLocalCachedAssets(): Promise<void> {
   await clearAllRoutineAssets();
+  await clearAllMergedVideos();
 
   const welcomeDirInfo = await FileSystem.getInfoAsync(WELCOME_DIR);
   if (welcomeDirInfo.exists) {

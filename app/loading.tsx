@@ -1,41 +1,29 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Animated } from 'react-native';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { ensureAuth } from '../services/firebase';
 import { requestNotificationPermissions } from '../services/notifications';
 import {
   downloadWelcomeAssets,
-  preloadRoutineAssetsInBackground,
+  warmAllRoutineAssetsToCompletion,
 } from '../services/assetCacheService';
 import { getPaidStatus } from '../services/subscription';
 import { getChildProfile, hasCompletedOnboarding } from '../services/profile';
-import { ensureNameAudioReady } from '../services/nameAudio';
 import { Routine } from '../types';
 import { hasDebugHomeAccess } from '../services/debugFlow';
 import { getHomeBootstrapSnapshot, primeHomeBootstrap } from '../services/homeBootstrap';
 import { colors, fs, ms, s, vs } from '../theme';
 import { isMorningTime } from '../utils/timeOfDay';
 
-const HOME_PREWARM_TIMEOUT_MS = 4500;
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<null>((resolve) => {
-        timer = setTimeout(() => resolve(null), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
 export default function LoadingScreen() {
+  const params = useLocalSearchParams<{ mode?: string }>();
+  const isPostQuestionnaire = params.mode === 'generating_experience';
+
   const progressAnim = useRef(new Animated.Value(0)).current;
-  const [progress, setProgress] = useState(0);
-  const [stage, setStage] = useState('Starting...');
+  const [progress, setProgress] = useState(isPostQuestionnaire ? 15 : 0);
+  const [stage, setStage] = useState(
+    isPostQuestionnaire ? 'Generating experience...' : 'Starting...'
+  );
 
   useEffect(() => {
     Animated.timing(progressAnim, {
@@ -50,66 +38,60 @@ export default function LoadingScreen() {
 
     async function run() {
       try {
-        setStage('Signing in...');
-        setProgress(20);
+        if (!isPostQuestionnaire) {
+          setStage('Signing in...');
+          setProgress(15);
+          await requestNotificationPermissions();
+        }
 
-        await requestNotificationPermissions();
         const user = await ensureAuth();
 
-        setStage('Preparing your coach...');
-        setProgress(55);
-        await downloadWelcomeAssets();
-        const isPaid = await getPaidStatus();
-
-        const onboardingDone = await hasCompletedOnboarding();
-
-        // Ensure the personalized name-audio clip is present locally (existence-guarded,
-        // non-blocking). Runs on every cold start once a child profile exists.
-        getChildProfile()
-          .then((p) => {
-            if (p?.childName) return ensureNameAudioReady(p.childName);
-            return null;
-          })
-          .catch((err) => console.warn('[Loading] Name audio preload failed:', err));
-
-        if (onboardingDone && isPaid) {
-          setStage('Loading your routines...');
-          setProgress(72);
-
-          const bootstrapPromise = primeHomeBootstrap(user.uid).catch((err) => {
-            console.warn('[Loading] Home bootstrap preload failed:', err);
-            return null;
+        if (!isPostQuestionnaire) {
+          setStage('Preparing your coach...');
+          setProgress(35);
+          await downloadWelcomeAssets().catch((err) => {
+            console.warn('[Loading] Welcome asset download error:', err);
           });
+        }
 
-          await withTimeout(bootstrapPromise, HOME_PREWARM_TIMEOUT_MS);
+        const isPaid = await getPaidStatus();
+        const onboardingDone = await hasCompletedOnboarding();
+        const hasDebugAccess = hasDebugHomeAccess();
+
+        if (isPostQuestionnaire || ((onboardingDone || hasDebugAccess) && (isPaid || hasDebugAccess))) {
+          setStage('Generating experience...');
+          setProgress(50);
+
+          await primeHomeBootstrap(user.uid).catch((err) => {
+            console.warn('[Loading] Home bootstrap preload failed:', err);
+          });
 
           const profile = await getChildProfile();
           const snapshot = getHomeBootstrapSnapshot(user.uid);
-          const fallbackRoutine: Routine | null = profile
-            ? {
-                id: isMorningTime(profile.scheduledTime) ? 'morning' : 'evening',
-                userId: profile.userId,
-                childName: profile.childName,
-                childAge: profile.age,
-                avatarId: profile.avatarId,
-                scheduledTime: profile.scheduledTime,
-                activityStack: profile.activityStack,
-                stepTimes: profile.stepTimes,
-                tone: profile.tone,
-                voice: profile.voice,
-              }
-            : null;
+          const routines: Routine[] = snapshot?.routines ?? [];
 
-          const routineToWarm = snapshot?.routines[0] ?? fallbackRoutine;
-          if (routineToWarm) {
-            setStage('Preparing media...');
-            setProgress(88);
+          if (routines.length === 0 && profile) {
+            const fallbackMorning: Routine = {
+              id: 'morning',
+              userId: profile.userId,
+              childName: profile.childName,
+              childAge: profile.age,
+              avatarId: profile.avatarId,
+              scheduledTime: profile.scheduledTime,
+              activityStack: profile.activityStack,
+              stepTimes: profile.stepTimes,
+              tone: profile.tone,
+              voice: profile.voice,
+            };
+            routines.push(fallbackMorning);
+          }
 
-            const warmPromise = preloadRoutineAssetsInBackground(routineToWarm).catch((err) => {
-              console.warn('[Loading] Background warmup failed:', err);
+          if (routines.length > 0) {
+            await warmAllRoutineAssetsToCompletion(routines, (stageText, pct) => {
+              if (isCancelled) return;
+              setStage(stageText);
+              setProgress(pct);
             });
-
-            await withTimeout(warmPromise, HOME_PREWARM_TIMEOUT_MS);
           }
         }
 
@@ -117,7 +99,7 @@ export default function LoadingScreen() {
         setProgress(100);
 
         if (isCancelled) return;
-        if (hasDebugHomeAccess()) {
+        if (hasDebugAccess) {
           router.replace('/');
           return;
         }
@@ -142,7 +124,7 @@ export default function LoadingScreen() {
     return () => {
       isCancelled = true;
     };
-  }, []);
+  }, [isPostQuestionnaire]);
 
   const width = progressAnim.interpolate({
     inputRange: [0, 100],

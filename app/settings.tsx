@@ -159,7 +159,7 @@ export default function SettingsScreen() {
       await clearAllLocalCachedAssets();
       Alert.alert(
         'Cache cleared',
-        'All locally cached videos, audio, and captions were removed. They will be re-downloaded next time you open a routine.'
+        'All locally cached videos, merged videos, audio, and captions were removed. They will be re-downloaded and rebuilt next time you open a routine.'
       );
     } catch (err) {
       console.warn('[Settings] failed to clear cached assets:', err);
@@ -172,7 +172,7 @@ export default function SettingsScreen() {
   const confirmClearCache = () => {
     Alert.alert(
       'Clear cached media?',
-      'This removes downloaded videos, audio, and captions from this device (your profile and routines are kept). They will be re-downloaded automatically.',
+      'This removes downloaded videos, merged videos, audio, and captions from this device (your profile and routines are kept). They will be re-downloaded and rebuilt automatically.',
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Clear cache', style: 'destructive', onPress: handleClearCache },
@@ -265,8 +265,8 @@ export default function SettingsScreen() {
         <TouchableOpacity style={[styles.card, styles.actionCard]} onPress={() => router.push('/parent/create' as never)}>
           <View style={styles.rowBetween}>
             <View style={styles.actionTextWrap}>
-              <Text style={styles.actionTitle}>Add activity</Text>
-              <Text style={styles.actionSubtitle}>Add another activity and routine step.</Text>
+              <Text style={styles.actionTitle}>Activity Manager</Text>
+              <Text style={styles.actionSubtitle}>Manage child activities and routines.</Text>
             </View>
             <Text style={styles.chevron}>›</Text>
           </View>

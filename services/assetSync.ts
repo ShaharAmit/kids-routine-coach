@@ -1,7 +1,8 @@
 import * as FileSystem from 'expo-file-system/legacy';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { db, storage, ensureAuth } from './firebase';
 import { doc, getDoc } from 'firebase/firestore';
-import { getDownloadURL, ref } from 'firebase/storage';
+import { getDownloadURL, getMetadata, ref } from 'firebase/storage';
 import { Routine, ActivityKey, CaptionCue } from '../types';
 import { ACTIVITIES } from '../constants/activities';
 import { TTS_AUDIO_ENABLED } from '../constants/featureFlags';
@@ -11,6 +12,7 @@ const AUDIO_DIR = `${FileSystem.documentDirectory}audio/`;
 const CAPTIONS_DIR = `${FileSystem.documentDirectory}captions/`;
 const MIN_VIDEO_FILE_BYTES = 16 * 1024;
 const MIN_AUDIO_FILE_BYTES = 4 * 1024;
+const VIDEO_GENERATION_KEY_PREFIX = 'video_generation_v1_';
 
 /** Ensure local cache directories exist */
 async function ensureDirs(): Promise<void> {
@@ -28,28 +30,86 @@ async function ensureDirs(): Promise<void> {
   }
 }
 
-/** Returns the local file path for a video asset */
-export function localVideoPath(activityKey: ActivityKey, avatarId: string): string {
-  return `${VIDEO_DIR}${avatarId}_${activityKey}.mp4`;
+/**
+ * Firebase Storage assigns a new `generation` id every time an object at the same path is
+ * overwritten. We persist the generation we last downloaded per remote path, so that
+ * re-uploading a fixed/updated video (same filename, e.g. after a proportions fix) is detected
+ * and forces a fresh download — without this, a "valid-looking" (right-sized) but stale local
+ * file would never be replaced, since `isValidCachedVideo` only checks size, not freshness.
+ */
+async function getStoredVideoGeneration(remoteStoragePath: string): Promise<string | null> {
+  try {
+    return await AsyncStorage.getItem(VIDEO_GENERATION_KEY_PREFIX + remoteStoragePath);
+  } catch {
+    return null;
+  }
+}
+
+async function setStoredVideoGeneration(remoteStoragePath: string, generation: string): Promise<void> {
+  try {
+    await AsyncStorage.setItem(VIDEO_GENERATION_KEY_PREFIX + remoteStoragePath, generation);
+  } catch {
+    // Best-effort — worst case we just re-check/re-download again next time.
+  }
+}
+
+/**
+ * Returns whether the locally cached copy of a remote video is still current. If the remote
+ * object can't be reached (offline), we assume "unchanged" so a valid local file keeps working
+ * offline instead of being needlessly invalidated.
+ */
+async function isRemoteVideoUnchanged(remoteStoragePath: string): Promise<{ unchanged: boolean; generation?: string }> {
+  try {
+    const meta = await getMetadata(ref(storage, remoteStoragePath));
+    const generation = meta.generation;
+    if (!generation) return { unchanged: true };
+    const stored = await getStoredVideoGeneration(remoteStoragePath);
+    return { unchanged: stored === generation, generation };
+  } catch {
+    return { unchanged: true };
+  }
+}
+
+
+/** Returns the local file path for a video asset (Part 2 / main) */
+export function localVideoPath(activityKey: ActivityKey | string, avatarId: string): string {
+  const safeActivity = (activityKey || 'activity').toString().trim().toLowerCase().replace(/[^a-z0-9]/g, '_') || 'activity';
+  const safeAvatar = (avatarId || 'becky').toString().trim().toLowerCase().replace(/[^a-z0-9]/g, '_') || 'becky';
+  return `${VIDEO_DIR}${safeAvatar}_${safeActivity}.mp4`;
+}
+
+/** Returns the local file path for Part 1 video */
+export function localPart1VideoPath(activityKey: ActivityKey | string, avatarId: string): string {
+  const safeActivity = (activityKey || 'activity').toString().trim().toLowerCase().replace(/[^a-z0-9]/g, '_') || 'activity';
+  const safeAvatar = (avatarId || 'becky').toString().trim().toLowerCase().replace(/[^a-z0-9]/g, '_') || 'becky';
+  return `${VIDEO_DIR}${safeAvatar}_${safeActivity}_p1.mp4`;
 }
 
 export async function isValidCachedVideo(localPath: string): Promise<boolean> {
-  const info = await FileSystem.getInfoAsync(localPath);
-  if (!info.exists) return false;
+  if (!localPath) return false;
+  try {
+    const info = await FileSystem.getInfoAsync(localPath);
+    if (!info.exists) return false;
 
-  // A tiny file is typically an HTML error page or partial download, not a playable MP4.
-  const size = 'size' in info && typeof info.size === 'number' ? info.size : 0;
-  return size >= MIN_VIDEO_FILE_BYTES;
+    // A tiny file is typically an HTML error page or partial download, not a playable MP4.
+    const size = 'size' in info && typeof info.size === 'number' ? info.size : 0;
+    return size >= MIN_VIDEO_FILE_BYTES;
+  } catch {
+    return false;
+  }
 }
 
 /** Returns the local file path for a TTS audio file */
 export function localAudioPath(cacheKey: string): string {
-  return `${AUDIO_DIR}${cacheKey}.wav`;
+  const safeKey = (cacheKey || 'cache').toString().trim().toLowerCase().replace(/[^a-z0-9]/g, '_') || 'cache';
+  return `${AUDIO_DIR}${safeKey}.wav`;
 }
 
 /** Returns the local file path for a caption cue JSON file */
-export function localCaptionsPath(activityKey: ActivityKey, avatarId: string): string {
-  return `${CAPTIONS_DIR}${avatarId}_${activityKey}.json`;
+export function localCaptionsPath(activityKey: ActivityKey | string, avatarId: string): string {
+  const safeActivity = (activityKey || 'activity').toString().trim().toLowerCase().replace(/[^a-z0-9]/g, '_') || 'activity';
+  const safeAvatar = (avatarId || 'becky').toString().trim().toLowerCase().replace(/[^a-z0-9]/g, '_') || 'becky';
+  return `${CAPTIONS_DIR}${safeAvatar}_${safeActivity}.json`;
 }
 
 async function isValidCachedAudio(localPath: string): Promise<boolean> {
@@ -92,19 +152,50 @@ export function buildAudioCacheKey(
 }
 
 /**
- * Download a single video file if not already cached locally.
+ * Download a single Part 1 video file if not already cached locally, or if the remote file
+ * was replaced since the last download (detected via Storage `generation`).
  */
-async function syncVideo(activityKey: ActivityKey, avatarId: string): Promise<void> {
-  const localPath = localVideoPath(activityKey, avatarId);
+async function syncPart1Video(activityKey: ActivityKey | string, avatarId: string): Promise<void> {
+  const localPath = localPart1VideoPath(activityKey, avatarId);
+  const remoteStoragePath = `avatars/${avatarId}/${activityKey}_p1.mp4`;
+
   const hasValidCachedVideo = await isValidCachedVideo(localPath);
-  if (hasValidCachedVideo) return;
+  const { unchanged, generation } = await isRemoteVideoUnchanged(remoteStoragePath);
+  if (hasValidCachedVideo && unchanged) return;
 
   const existing = await FileSystem.getInfoAsync(localPath);
   if (existing.exists) {
     await FileSystem.deleteAsync(localPath, { idempotent: true });
   }
 
+  try {
+    const remoteUrl = await getDownloadURL(ref(storage, remoteStoragePath));
+    const downloadResult = await FileSystem.downloadAsync(remoteUrl, localPath);
+    const status = (downloadResult as { status?: number }).status;
+    if (typeof status === 'number' && status >= 400) {
+      await FileSystem.deleteAsync(localPath, { idempotent: true });
+      return;
+    }
+    if (generation && (await isValidCachedVideo(localPath))) {
+      await setStoredVideoGeneration(remoteStoragePath, generation);
+    }
+  } catch (err) {
+    console.warn(`[AssetSync] Part 1 video not available for ${activityKey}:`, err);
+  }
+}
+async function syncVideo(activityKey: ActivityKey, avatarId: string): Promise<void> {
+  const localPath = localVideoPath(activityKey, avatarId);
   const remoteStoragePath = `avatars/${avatarId}/${activityKey}.mp4`;
+
+  const hasValidCachedVideo = await isValidCachedVideo(localPath);
+  const { unchanged, generation } = await isRemoteVideoUnchanged(remoteStoragePath);
+  if (hasValidCachedVideo && unchanged) return;
+
+  const existing = await FileSystem.getInfoAsync(localPath);
+  if (existing.exists) {
+    await FileSystem.deleteAsync(localPath, { idempotent: true });
+  }
+
   const remoteUrl = await getDownloadURL(ref(storage, remoteStoragePath));
   console.log(`[AssetSync] Downloading video: ${remoteUrl}`);
   const downloadResult = await FileSystem.downloadAsync(remoteUrl, localPath);
@@ -120,6 +211,40 @@ async function syncVideo(activityKey: ActivityKey, avatarId: string): Promise<vo
     await FileSystem.deleteAsync(localPath, { idempotent: true });
     throw new Error(`[AssetSync] Downloaded video is invalid or too small: ${remoteUrl}`);
   }
+
+  if (generation) {
+    await setStoredVideoGeneration(remoteStoragePath, generation);
+  }
+}
+
+/**
+ * On-demand, single-activity readiness check + repair. Used defensively by the player right
+ * before a Part 1 → Part 2 transition (or on step init): if a video is missing/invalid on
+ * device — e.g. it failed to download during preload, or was replaced on the server after the
+ * routine was already cached — this re-attempts the download once and reports final readiness,
+ * instead of the player silently freezing on whatever it already has loaded.
+ */
+export async function ensureActivityVideoReady(
+  activityKey: ActivityKey | string,
+  avatarId: string
+): Promise<{ p1Ready: boolean; p2Ready: boolean }> {
+  await ensureDirs();
+  try {
+    await ensureAuth();
+  } catch {
+    // Offline / auth failure — fall through and report whatever is already on disk.
+  }
+
+  await Promise.allSettled([
+    syncPart1Video(activityKey, avatarId),
+    syncVideo(activityKey as ActivityKey, avatarId),
+  ]);
+
+  const [p1Ready, p2Ready] = await Promise.all([
+    isValidCachedVideo(localPart1VideoPath(activityKey, avatarId)),
+    isValidCachedVideo(localVideoPath(activityKey, avatarId)),
+  ]);
+  return { p1Ready, p2Ready };
 }
 
 /**
@@ -186,14 +311,19 @@ export async function ensureCaptionsData(
   avatarId: string
 ): Promise<CaptionCue[] | null> {
   await ensureDirs();
-  await ensureAuth();
 
   const localPath = localCaptionsPath(activityKey, avatarId);
-  try {
-    await syncCaptions(activityKey, avatarId);
-  } catch (err) {
-    console.warn(`[AssetSync] No captions available for ${activityKey}:`, err);
-    return null;
+  const existing = await FileSystem.getInfoAsync(localPath);
+  const hasLocal = existing.exists && 'size' in existing && typeof existing.size === 'number' && existing.size > 0;
+
+  if (!hasLocal) {
+    try {
+      await ensureAuth();
+      await syncCaptions(activityKey, avatarId);
+    } catch (err) {
+      console.warn(`[AssetSync] No captions available for ${activityKey}:`, err);
+      return null;
+    }
   }
 
   try {
@@ -217,24 +347,46 @@ export async function syncRoutineAssets(
   routine: Routine
 ): Promise<{ missingAudioKeys: string[] }> {
   await ensureDirs();
-  await ensureAuth();
 
   const missingAudioKeys: string[] = [];
-  const activityKeys = routine.activityStack.flat();
+  const rawKeys = routine.activityStack.flat();
+  const activityKeys = Array.from(new Set(rawKeys));
+
+  let hasAuthenticated = false;
+  const lazyEnsureAuth = async () => {
+    if (!hasAuthenticated) {
+      await ensureAuth();
+      hasAuthenticated = true;
+    }
+  };
 
   const syncTasks = activityKeys.map(async (activityKey) => {
-    // 1. Sync video (required)
+    // 1. Sync videos (Part 1 greeting + Part 2 activity). Always call through to
+    // syncPart1Video/syncVideo — they internally short-circuit against a Storage
+    // `generation` check, so a merely size-valid-but-stale local file (e.g. after the
+    // source video was replaced on the server) still gets refreshed.
     try {
-      await syncVideo(activityKey, routine.avatarId);
+      await lazyEnsureAuth();
+      await Promise.allSettled([
+        syncPart1Video(activityKey, routine.avatarId),
+        syncVideo(activityKey, routine.avatarId),
+      ]);
     } catch (err) {
-      console.warn(`[AssetSync] Failed to download video for ${activityKey}:`, err);
+        console.warn(`[AssetSync] Failed to download video for ${activityKey}:`, err);
     }
 
-    // 2. Sync caption cues (best-effort — may not exist for every activity)
-    try {
-      await syncCaptions(activityKey, routine.avatarId);
-    } catch (err) {
-      console.warn(`[AssetSync] Failed to download captions for ${activityKey}:`, err);
+    // 2. Sync caption cues - check local cache first
+    const captionPath = localCaptionsPath(activityKey, routine.avatarId);
+    const captionInfo = await FileSystem.getInfoAsync(captionPath);
+    const hasCaptions = captionInfo.exists && 'size' in captionInfo && typeof captionInfo.size === 'number' && captionInfo.size > 0;
+
+    if (!hasCaptions) {
+      try {
+        await lazyEnsureAuth();
+        await syncCaptions(activityKey, routine.avatarId);
+      } catch (err) {
+        // Captions are optional / best-effort
+      }
     }
 
     // 3. Sync audio (skipped while personalized TTS narration is disabled — see featureFlags.ts)
@@ -252,6 +404,7 @@ export async function syncRoutineAssets(
 
     if (!audioReady) {
       try {
+        await lazyEnsureAuth();
         const audioDocRef = doc(db, 'audio_cache', cacheKey);
         const audioDoc = await getDoc(audioDocRef);
 
@@ -276,21 +429,15 @@ export async function syncRoutineAssets(
  * Check whether all assets for a routine are available locally.
  */
 export async function areAssetsReady(routine: Routine): Promise<boolean> {
-  for (const activityKey of routine.activityStack.flat()) {
+  const rawKeys = routine.activityStack.flat();
+  const activityKeys = Array.from(new Set(rawKeys)).filter(
+    (k) => typeof k === 'string' && k.length > 0 && Boolean(ACTIVITIES[k as ActivityKey])
+  );
+  if (activityKeys.length === 0) return true;
+
+  for (const activityKey of activityKeys) {
     const videoReady = await isValidCachedVideo(localVideoPath(activityKey, routine.avatarId));
     if (!videoReady) return false;
-
-    if (!TTS_AUDIO_ENABLED) continue; // Narration audio comes from the video itself for now.
-
-    const cacheKey = buildAudioCacheKey(
-      routine.childName,
-      activityKey,
-      routine.avatarId,
-      routine.tone,
-      routine.voice
-    );
-    const audioReady = await isValidCachedAudio(localAudioPath(cacheKey));
-    if (!audioReady) return false;
   }
   return true;
 }
@@ -300,6 +447,12 @@ export async function areAssetsReady(routine: Routine): Promise<boolean> {
  */
 export async function clearRoutineAssets(routine: Routine): Promise<void> {
   for (const activityKey of routine.activityStack.flat()) {
+    const p1VideoPath = localPart1VideoPath(activityKey, routine.avatarId);
+    const p1VideoInfo = await FileSystem.getInfoAsync(p1VideoPath);
+    if (p1VideoInfo.exists) {
+      await FileSystem.deleteAsync(p1VideoPath, { idempotent: true });
+    }
+
     const videoPath = localVideoPath(activityKey, routine.avatarId);
     const videoInfo = await FileSystem.getInfoAsync(videoPath);
     if (videoInfo.exists) {
@@ -344,6 +497,17 @@ export async function clearAllRoutineAssets(): Promise<void> {
   const captionsDirInfo = await FileSystem.getInfoAsync(CAPTIONS_DIR);
   if (captionsDirInfo.exists) {
     await FileSystem.deleteAsync(CAPTIONS_DIR, { idempotent: true });
+  }
+
+  // Drop the remote-generation markers too. Without this, a cleared-but-remembered video is
+  // re-downloaded and then immediately considered "current" against a stale generation value,
+  // which defeats the point of a manual cache clear.
+  try {
+    const keys = await AsyncStorage.getAllKeys();
+    const generationKeys = keys.filter((key) => key.startsWith(VIDEO_GENERATION_KEY_PREFIX));
+    await Promise.all(generationKeys.map((key) => AsyncStorage.removeItem(key)));
+  } catch {
+    // Best-effort — a stale marker only costs one extra metadata check.
   }
 }
 

@@ -17,13 +17,6 @@ export const ADDITIONAL_ACTIVITIES: ActivityConfig[] = [
     avatarVideoRef: 'avatar_loop_tidy_room.mp4',
   },
   {
-    id: 'take_shower',
-    uiTitle: 'Take a Shower',
-    uiEmoji: '🚿',
-    defaultTTSPhrase: 'Time for a refreshing shower, {childName}!',
-    avatarVideoRef: 'avatar_loop_use_toilet.mp4',
-  },
-  {
     id: 'read_book',
     uiTitle: 'Read a Book',
     uiEmoji: '📚',
@@ -111,14 +104,6 @@ export const ACTIVITIES: Record<ActivityKey, ActivityMeta> = {
     videoFile: 'avatar_loop_tidy_room.mp4',
     emoji: '🧸',
     color: '#7E57C2',
-  },
-  take_shower: {
-    key: 'take_shower',
-    label: 'Take a Shower',
-    promptTemplate: (name) => `Time for a refreshing shower, ${name}!`,
-    videoFile: 'avatar_loop_use_toilet.mp4',
-    emoji: '🚿',
-    color: '#26A69A',
   },
   read_book: {
     key: 'read_book',

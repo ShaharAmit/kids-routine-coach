@@ -1,3 +1,4 @@
+import * as FileSystem from 'expo-file-system/legacy';
 import { httpsCallable } from 'firebase/functions';
 import { doc, getDoc } from 'firebase/firestore';
 import { functions, db, ensureAuth } from './firebase';
@@ -29,13 +30,7 @@ interface GenerateTTSResponse {
 export async function ensureAudioForRoutine(routine: Routine): Promise<void> {
   if (!TTS_AUDIO_ENABLED) return; // Avatar videos already carry baked-in narration audio for now.
 
-  await ensureAuth();
-  const generateTTS = httpsCallable<GenerateTTSRequest, GenerateTTSResponse>(
-    functions,
-    'generateRoutineAudio'
-  );
-
-  const activityKeys = routine.activityStack.flat();
+  const activityKeys = Array.from(new Set(routine.activityStack.flat()));
 
   const tasks = activityKeys.map(async (activityKey) => {
     const cacheKey = buildAudioCacheKey(
@@ -45,9 +40,23 @@ export async function ensureAudioForRoutine(routine: Routine): Promise<void> {
       routine.tone,
       routine.voice
     );
+
+    // If already exists locally on device, skip Firestore check and generation completely
+    const localPath = `${FileSystem.documentDirectory}audio/${cacheKey}.wav`;
+    const localInfo = await FileSystem.getInfoAsync(localPath);
+    if (localInfo.exists && 'size' in localInfo && (localInfo.size ?? 0) >= 4096) {
+      return;
+    }
+
+    await ensureAuth();
+    const generateTTS = httpsCallable<GenerateTTSRequest, GenerateTTSResponse>(
+      functions,
+      'generateRoutineAudio'
+    );
+
     const cacheRef = doc(db, 'audio_cache', cacheKey);
 
-    // Check if audio already exists and is ready
+    // Check if audio already exists and is ready in Firestore
     const cached = await getDoc(cacheRef);
     if (cached.exists() && cached.data()?.status === 'ready') {
       return; // Already generated
