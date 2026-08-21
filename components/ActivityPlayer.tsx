@@ -8,8 +8,10 @@ import {
   ScrollView,
   ActivityIndicator,
 } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { VideoView, useVideoPlayer, VideoSize } from 'expo-video';
 import { setAudioModeAsync } from 'expo-audio';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ActivityKey, ActivityStep, CaptionCue } from '../types';
 import { ACTIVITIES } from '../constants/activities';
 import { isValidCachedVideo, ensureActivityVideoReady } from '../services/assetSync';
@@ -54,6 +56,9 @@ interface VideoStageProps {
   uri: string;
   showCaptions: boolean;
   captionCues: CaptionCue[] | null;
+  videoEnded: boolean;
+  accentColor: string;
+  onRetry: () => void;
   onEnded: () => void;
 }
 
@@ -70,7 +75,15 @@ interface VideoStageProps {
  * VideoView did not help, because the stale object is the player, not the view). Creating the
  * player already pointed at the right file avoids that failure mode entirely.
  */
-function VideoStage({ uri, showCaptions, captionCues, onEnded }: VideoStageProps) {
+function VideoStage({
+  uri,
+  showCaptions,
+  captionCues,
+  videoEnded,
+  accentColor,
+  onRetry,
+  onEnded,
+}: VideoStageProps) {
   const [aspectRatio, setAspectRatio] = useState(DEFAULT_ASPECT_RATIO);
   const [currentTime, setCurrentTime] = useState(0);
 
@@ -156,6 +169,17 @@ function VideoStage({ uri, showCaptions, captionCues, onEnded }: VideoStageProps
         allowsVideoFrameAnalysis={false}
       />
 
+      {videoEnded ? (
+        <TouchableOpacity
+          style={[styles.retryButton, { backgroundColor: accentColor }]}
+          onPress={onRetry}
+          activeOpacity={0.85}
+          accessibilityLabel="Replay video"
+        >
+          <MaterialCommunityIcons name="replay" size={ms(30)} color={colors.white} />
+        </TouchableOpacity>
+      ) : null}
+
       {showCaptions && activeCaptionText ? (
         <View style={styles.captionBar} pointerEvents="none">
           <Text style={styles.captionText}>{activeCaptionText}</Text>
@@ -174,6 +198,7 @@ export default function ActivityPlayer({
   showCaptions = false,
   onComplete,
 }: ActivityPlayerProps) {
+  const insets = useSafeAreaInsets();
   const [activityIndex, setActivityIndex] = useState(0);
   const [videoEnded, setVideoEnded] = useState(false);
   const [captionCues, setCaptionCues] = useState<CaptionCue[] | null>(null);
@@ -318,7 +343,12 @@ export default function ActivityPlayer({
       ) : null}
 
       {/* Activity emoji + label */}
-      <Text style={styles.emoji}>{activity.emoji}</Text>
+      <Text
+        style={[styles.emoji, { top: insets.top + vs(12), right: s(16) }]}
+        accessibilityLabel={`${activity.label} activity icon`}
+      >
+        {activity.emoji}
+      </Text>
       <Text style={[styles.activityLabel, { color: activity.color }]}>{activity.label}</Text>
 
       {/* Avatar video — one player, one file, created already pointed at that file */}
@@ -328,6 +358,9 @@ export default function ActivityPlayer({
           uri={resolved.uri}
           showCaptions={showCaptions}
           captionCues={captionCues}
+          videoEnded={videoEnded}
+          accentColor={activity.color}
+          onRetry={handleRetryVideo}
           onEnded={handleVideoEnded}
         />
       ) : (
@@ -347,16 +380,6 @@ export default function ActivityPlayer({
             </>
           )}
         </View>
-      )}
-
-      {videoEnded && (
-        <TouchableOpacity
-          style={[styles.retryButton, { borderColor: activity.color }]}
-          onPress={handleRetryVideo}
-          activeOpacity={0.85}
-        >
-          <Text style={[styles.retryButtonText, { color: activity.color }]}>Retry Video</Text>
-        </TouchableOpacity>
       )}
 
       {/* Personalized prompt text */}
@@ -415,8 +438,8 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   emoji: {
+    position: 'absolute',
     fontSize: fs(56),
-    marginBottom: vs(4),
   },
   activityLabel: {
     fontSize: fs(28),
@@ -467,16 +490,16 @@ const styles = StyleSheet.create({
     lineHeight: fs(20),
   },
   retryButton: {
-    borderWidth: 2,
-    borderRadius: ms(24),
-    paddingVertical: vs(10),
-    paddingHorizontal: s(20),
-    marginBottom: vs(14),
-    backgroundColor: colors.white,
-  },
-  retryButtonText: {
-    fontSize: fs(16),
-    fontWeight: '700',
+    position: 'absolute',
+    alignSelf: 'center',
+    top: '50%',
+    marginTop: -ms(26),
+    width: ms(52),
+    height: ms(52),
+    borderRadius: ms(26),
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 5,
   },
   promptText: {
     fontSize: fs(18),
