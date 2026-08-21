@@ -34,9 +34,35 @@ const CONTAINER_WIDTH = SCREEN_WIDTH * 0.8;
 const MAX_CONTAINER_HEIGHT = SCREEN_HEIGHT * 0.55;
 const DEFAULT_ASPECT_RATIO = 9 / 16;
 
+const ACTIVITY_TIMER_SECONDS: Record<ActivityKey, number> = {
+  wake_up: 60,
+  brush_teeth: 120,
+  wash_face: 90,
+  comb_hair: 120,
+  get_dressed: 180,
+  put_shoes_on: 90,
+  pack_backpack: 180,
+  drink_water: 30,
+  tidy_room: 300,
+  make_bed: 180,
+  eat_breakfast: 600,
+  homework: 900,
+  read_book: 600,
+  put_on_pajamas: 180,
+  eat_dinner: 900,
+  bedtime_story: 600,
+  go_to_sleep: 300,
+};
+
 function clampContainerHeight(aspectRatio: number): number {
   const idealHeight = CONTAINER_WIDTH / aspectRatio;
   return Math.min(idealHeight, MAX_CONTAINER_HEIGHT);
+}
+
+function formatCountdown(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return `${minutes}:${remainder.toString().padStart(2, '0')}`;
 }
 
 /**
@@ -57,6 +83,7 @@ interface VideoStageProps {
   showCaptions: boolean;
   captionCues: CaptionCue[] | null;
   videoEnded: boolean;
+  timerSecondsRemaining: number | null;
   accentColor: string;
   onRetry: () => void;
   onEnded: () => void;
@@ -80,6 +107,7 @@ function VideoStage({
   showCaptions,
   captionCues,
   videoEnded,
+  timerSecondsRemaining,
   accentColor,
   onRetry,
   onEnded,
@@ -180,6 +208,12 @@ function VideoStage({
         </TouchableOpacity>
       ) : null}
 
+      {timerSecondsRemaining !== null ? (
+        <View style={styles.timerOverlay} pointerEvents="none">
+          <Text style={styles.timerText}>{formatCountdown(timerSecondsRemaining)}</Text>
+        </View>
+      ) : null}
+
       {showCaptions && activeCaptionText ? (
         <View style={styles.captionBar} pointerEvents="none">
           <Text style={styles.captionText}>{activeCaptionText}</Text>
@@ -201,6 +235,7 @@ export default function ActivityPlayer({
   const insets = useSafeAreaInsets();
   const [activityIndex, setActivityIndex] = useState(0);
   const [videoEnded, setVideoEnded] = useState(false);
+  const [timerSecondsRemaining, setTimerSecondsRemaining] = useState<number | null>(null);
   const [captionCues, setCaptionCues] = useState<CaptionCue[] | null>(null);
   const [resolved, setResolved] = useState<ResolvedSource | null>(null);
   // Bumped by "Retry Video". Because it is part of the VideoStage key, retrying tears the player
@@ -231,6 +266,7 @@ export default function ActivityPlayer({
     setResolved(null);
     setCaptionCues(null);
     setVideoEnded(false);
+    setTimerSecondsRemaining(null);
 
     async function resolveSource() {
       let mergedUri = await getReadyMergedVideoPath(
@@ -296,8 +332,25 @@ export default function ActivityPlayer({
     setVideoEnded(true);
   }, []);
 
+  useEffect(() => {
+    if (!videoEnded) {
+      setTimerSecondsRemaining(null);
+      return;
+    }
+
+    setTimerSecondsRemaining(ACTIVITY_TIMER_SECONDS[currentActivityKey]);
+    const timer = setInterval(() => {
+      setTimerSecondsRemaining((remaining) =>
+        remaining === null ? null : Math.max(0, remaining - 1)
+      );
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [currentActivityKey, videoEnded]);
+
   const handleRetryVideo = useCallback(() => {
     setVideoEnded(false);
+    setTimerSecondsRemaining(null);
     setRetryNonce((n) => n + 1);
   }, []);
 
@@ -359,6 +412,7 @@ export default function ActivityPlayer({
           showCaptions={showCaptions}
           captionCues={captionCues}
           videoEnded={videoEnded}
+          timerSecondsRemaining={timerSecondsRemaining}
           accentColor={activity.color}
           onRetry={handleRetryVideo}
           onEnded={handleVideoEnded}
@@ -481,6 +535,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: s(14),
     paddingVertical: vs(8),
     backgroundColor: 'rgba(0,0,0,0.55)',
+  },
+  timerOverlay: {
+    position: 'absolute',
+    left: '18%',
+    right: '18%',
+    bottom: '18%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: vs(10),
+    borderRadius: ms(18),
+    backgroundColor: 'rgba(0,0,0,0.52)',
+  },
+  timerText: {
+    color: colors.white,
+    fontSize: fs(36),
+    fontWeight: '900',
+    letterSpacing: 1,
   },
   captionText: {
     color: colors.white,
