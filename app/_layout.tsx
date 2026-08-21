@@ -41,6 +41,21 @@ function TabLabel({ text, color }: { text: string; color: string }) {
   );
 }
 
+function NavigationBackButton() {
+  return (
+    <View style={{ marginLeft: s(12) }}>
+      <MaterialCommunityIcons.Button
+        name="arrow-left"
+        size={ms(24)}
+        color={colors.textInk}
+        backgroundColor="transparent"
+        underlayColor="transparent"
+        onPress={() => router.replace('/' as never)}
+      />
+    </View>
+  );
+}
+
 export default function RootLayout() {
   const { width: screenWidth } = useWindowDimensions();
   const pathname = usePathname();
@@ -205,6 +220,24 @@ export default function RootLayout() {
             options={{
               headerTitle: () => <HeaderTitle segment={segment} />,
               title: 'Routines',
+              headerShown: homeViewMode !== 'player',
+              tabBarStyle:
+                homeViewMode === 'player'
+                  ? { display: 'none' }
+                  : {
+                      position: 'absolute',
+                      marginHorizontal: tabBarHorizontalInset,
+                      bottom: vs(34),
+                      height: vs(66),
+                      borderRadius: ms(20),
+                      backgroundColor: '#FFFFFF',
+                      borderTopWidth: 0,
+                      shadowColor: '#000',
+                      shadowOffset: { width: 0, height: vs(6) },
+                      shadowOpacity: 0.12,
+                      shadowRadius: ms(10),
+                      elevation: 10,
+                    },
               tabBarLabel: ({ color }) => <TabLabel text="Routines" color={color} />,
               tabBarIcon: ({ color, size }) => (
                 <MaterialCommunityIcons name="checkbox-marked-circle-outline" size={size} color={color} />
@@ -215,8 +248,10 @@ export default function RootLayout() {
             name="rewards"
             options={{
               title: 'Rewards',
+              headerLeft: () => <NavigationBackButton />,
               headerStyle: { backgroundColor: colors.morningBg },
               headerTintColor: colors.textInk,
+              tabBarStyle: { display: 'none' },
               tabBarLabel: ({ color }) => <TabLabel text="Rewards" color={color} />,
               tabBarIcon: ({ color, size }) => (
                 <MaterialCommunityIcons name="star" size={size} color={color} />
@@ -227,8 +262,10 @@ export default function RootLayout() {
             name="settings"
             options={{
               title: 'Settings',
+              headerLeft: () => <NavigationBackButton />,
               headerStyle: { backgroundColor: colors.morningBg },
               headerTintColor: colors.textInk,
+              tabBarStyle: { display: 'none' },
               tabBarLabel: ({ color }) => <TabLabel text="Settings" color={color} />,
               tabBarIcon: ({ color, size }) => (
                 <MaterialCommunityIcons name="cog" size={size} color={color} />
@@ -242,8 +279,8 @@ export default function RootLayout() {
             options={{
               href: null,
               title: 'Activity Manager',
-              headerStyle: { backgroundColor: '#F5F7FA' },
-              headerTintColor: colors.textInk,
+              headerShown: false,
+              tabBarStyle: { display: 'none' },
             }}
           />
         </Tabs>

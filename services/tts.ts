@@ -32,7 +32,7 @@ export async function ensureAudioForRoutine(routine: Routine): Promise<void> {
 
   const activityKeys = Array.from(new Set(routine.activityStack.flat()));
 
-  const tasks = activityKeys.map(async (activityKey) => {
+  const activities = activityKeys.map(async (activityKey) => {
     const cacheKey = buildAudioCacheKey(
       routine.childName,
       activityKey,
@@ -83,7 +83,7 @@ export async function ensureAudioForRoutine(routine: Routine): Promise<void> {
     }
   });
 
-  await Promise.allSettled(tasks);
+  await Promise.allSettled(activities);
 }
 
 /**

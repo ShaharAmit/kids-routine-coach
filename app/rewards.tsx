@@ -198,7 +198,7 @@ export default function RewardsScreen() {
         {/* Info Box */}
         <View style={styles.infoBox}>
           <Text style={styles.infoLabel}>💡 How to earn stars</Text>
-          <Text style={styles.infoText}>Complete your morning and evening tasks to earn stars and unlock new levels!</Text>
+          <Text style={styles.infoText}>Complete your morning and evening activities to earn stars and unlock new levels!</Text>
         </View>
       </ScrollView>
     </PageBackground>

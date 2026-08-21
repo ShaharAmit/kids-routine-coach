@@ -24,7 +24,7 @@ export default function DailyProgressCard({ segment, progress }: DailyProgressCa
     <View style={[styles.container, { backgroundColor: bgColor }]}>
       <View style={styles.header}>
         <Text style={styles.emoji}>{emoji}</Text>
-        <Text style={styles.label}>{label} Tasks</Text>
+        <Text style={styles.label}>{label} Activities</Text>
         {isComplete && <Text style={styles.badge}>✓ Complete!</Text>}
       </View>
 

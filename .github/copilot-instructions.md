@@ -102,7 +102,7 @@ Post-setup core flow:
 2. `areAssetsReady()` checks local cache; if incomplete, `syncRoutineAssets()` downloads missing files.
 3. If audio is still missing, `ensureAudioForRoutine()` calls the `generateRoutineAudio` Cloud Function, then retries sync up to 4 times (1.5 s apart).
 4. The `segment` query param (`morning` | `evening`) filters which steps are shown.
-5. **Tasks view**: scrollable list of step cards; tapping a card sets `viewMode = 'player'`.
+5. **Activities view**: scrollable list of step cards; tapping a card sets `viewMode = 'player'`.
 6. **Player view**: `ActivityPlayer` renders a silent looping avatar video with TTS audio overlay. On `playToEnd`, the step is marked complete.
 7. All scoped steps complete → trophy completion screen → "Go Home" → `/`.
 
@@ -146,7 +146,7 @@ Post-setup core flow:
 
 **`parent/create.tsx`** — Lightweight "add routine" form. Requires an existing `ChildProfile`; redirects to questionnaire if none exists. After save, triggers asset sync and TTS generation in parallel.
 
-**`routine/[id].tsx`** — Routine runner. Manages two view modes (`tasks` | `player`), per-step completion state, and morning/evening segment filtering. Mounts `ActivityPlayer` with a `key` prop so media resets on step change.
+**`routine/[id].tsx`** — Routine runner. Manages two view modes (`activities` | `player`), per-step completion state, and morning/evening segment filtering. Mounts `ActivityPlayer` with a `key` prop so media resets on step change.
 
 ### `components/`
 

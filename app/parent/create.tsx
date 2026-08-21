@@ -525,7 +525,7 @@ export default function CreateRoutineScreen() {
         <>
           <ScrollView
             style={styles.container}
-            contentContainerStyle={[styles.content, { paddingBottom: vs(100) + insets.bottom, paddingTop: insets.top + vs(6) }]}
+            contentContainerStyle={[styles.content, { paddingBottom: vs(32) + insets.bottom, paddingTop: insets.top + vs(6) }]}
             showsVerticalScrollIndicator={false}
           >
             {/* Custom in-page header row */}

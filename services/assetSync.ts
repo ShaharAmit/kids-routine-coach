@@ -360,7 +360,7 @@ export async function syncRoutineAssets(
     }
   };
 
-  const syncTasks = activityKeys.map(async (activityKey) => {
+  const syncActivities = activityKeys.map(async (activityKey) => {
     // 1. Sync videos (Part 1 greeting + Part 2 activity). Always call through to
     // syncPart1Video/syncVideo — they internally short-circuit against a Storage
     // `generation` check, so a merely size-valid-but-stale local file (e.g. after the
@@ -421,7 +421,7 @@ export async function syncRoutineAssets(
     }
   });
 
-  await Promise.allSettled(syncTasks);
+  await Promise.allSettled(syncActivities);
   return { missingAudioKeys };
 }
 

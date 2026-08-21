@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { router } from 'expo-router';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import ActivityPlayer from '../components/ActivityPlayer';
 import StarsBackground from '../components/StarsBackground';
 import CloudsBackground from '../components/CloudsBackground';
@@ -103,6 +103,7 @@ const roundedFontBold = ROUNDED_FONT;
 
 export default function HomeScreen() {
   const navigation = useNavigation();
+  const insets = useSafeAreaInsets();
   const [userId, setUserId] = useState('');
   const [cacheStage, setCacheStage] = useState('idle');
   const [segment, setSegment] = useState<'morning' | 'evening'>(getCurrentSegment());
@@ -233,6 +234,8 @@ export default function HomeScreen() {
   useEffect(() => {
     const isEveningHeader = segment === 'evening';
     navigation.setOptions({
+      headerShown: viewMode !== 'player',
+      tabBarStyle: viewMode === 'player' ? { display: 'none' } : undefined,
       headerStyle: { backgroundColor: isEveningHeader ? colors.eveningBg : colors.morningBg },
       headerTintColor: isEveningHeader ? '#FFF' : '#1E7B7B',
       headerTitleStyle: {
@@ -242,7 +245,7 @@ export default function HomeScreen() {
       },
       headerShadowVisible: false,
     });
-  }, [navigation, segment]);
+  }, [navigation, segment, viewMode]);
 
   // Let the root layout know when the full-screen activity player is active so it can hide
   // the moon/sun decoration (which should only float over the activities list, not the video).
@@ -550,7 +553,7 @@ export default function HomeScreen() {
           />
 
           <TouchableOpacity
-            style={styles.backToActivitiesBtn}
+            style={[styles.backToActivitiesBtn, { top: insets.top + vs(12) }]}
             onPress={() => setViewMode('activities')}
             activeOpacity={0.9}
           >

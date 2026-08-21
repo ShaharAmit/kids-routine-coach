@@ -148,7 +148,13 @@ function VideoStage({ uri, showCaptions, captionCues, onEnded }: VideoStageProps
         { width: CONTAINER_WIDTH, height: clampContainerHeight(aspectRatio) },
       ]}
     >
-      <VideoView player={player} style={styles.video} contentFit="cover" nativeControls={false} />
+      <VideoView
+        player={player}
+        style={styles.video}
+        contentFit="cover"
+        nativeControls={false}
+        allowsVideoFrameAnalysis={false}
+      />
 
       {showCaptions && activeCaptionText ? (
         <View style={styles.captionBar} pointerEvents="none">

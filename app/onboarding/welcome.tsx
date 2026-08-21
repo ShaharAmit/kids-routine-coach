@@ -1,5 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Image, StyleSheet, Text, TouchableOpacity, ActivityIndicator } from 'react-native';
+import {
+  View,
+  Image,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  ActivityIndicator,
+  ScrollView,
+  useWindowDimensions,
+} from 'react-native';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { setAudioModeAsync } from 'expo-audio';
 import Animated, { FadeIn } from 'react-native-reanimated';
@@ -13,13 +22,14 @@ import { colors, fs, ms, s, vs } from '../../theme';
 type WelcomeVideoPlayerProps = {
   videoPath: string;
   posterUri?: string;
+  height: number;
   onEnded: () => void;
 };
 
 // If the video hasn't started rendering within this many ms, skip it.
 const VIDEO_START_TIMEOUT_MS = 8_000;
 
-function WelcomeVideoPlayer({ videoPath, posterUri, onEnded }: WelcomeVideoPlayerProps) {
+function WelcomeVideoPlayer({ videoPath, posterUri, height, onEnded }: WelcomeVideoPlayerProps) {
   const [isVideoReady, setIsVideoReady] = useState(false);
 
   const videoPlayer = useVideoPlayer(videoPath, (player) => {
@@ -81,12 +91,13 @@ function WelcomeVideoPlayer({ videoPath, posterUri, onEnded }: WelcomeVideoPlaye
   }, [onEnded, videoPlayer]);
 
   return (
-    <View style={styles.videoContainer}>
+    <View style={[styles.videoContainer, { height }]}>
       <VideoView
         player={videoPlayer}
         style={styles.video}
         contentFit="contain"
         nativeControls={false}
+        allowsVideoFrameAnalysis={false}
       />
       {/* Poster overlay: sits above the video until the native engine has painted its first frame. */}
       {!isVideoReady && posterUri ? (
@@ -106,6 +117,8 @@ const MIN_VIDEO_BYTES = 16 * 1024; // same threshold as assetCacheService
 
 export default function WelcomeScreen() {
   const insets = useSafeAreaInsets();
+  const { height: screenHeight } = useWindowDimensions();
+  const scrollRef = React.useRef<ScrollView>(null);
   const [videoDone, setVideoDone] = useState(false);
   const [isPreparing, setIsPreparing] = useState(true);
   const [assetsReady, setAssetsReady] = useState(false);
@@ -171,23 +184,47 @@ export default function WelcomeScreen() {
     };
   }, [videoPath, forceShowContinue]);
 
+  useEffect(() => {
+    if (!videoDone) return;
+
+    const timer = setTimeout(() => {
+      scrollRef.current?.scrollTo({ y: screenHeight, animated: true });
+    }, 50);
+
+    return () => clearTimeout(timer);
+  }, [screenHeight, videoDone]);
+
   return (
-    <View style={styles.container}>
+    <ScrollView
+      ref={scrollRef}
+      style={styles.scroll}
+      contentContainerStyle={styles.scrollContent}
+      showsVerticalScrollIndicator={false}
+      bounces={false}
+    >
       {isPreparing ? (
-        <View style={styles.fallback}>
+        <View style={[styles.fallback, { height: screenHeight }]}>
           <ActivityIndicator size="large" color="#FFFFFF" />
           <Text style={styles.preparingText}>Preparing welcome video...</Text>
         </View>
       ) : assetsReady ? (
-        <WelcomeVideoPlayer videoPath={videoPath} posterUri={posterUri} onEnded={forceShowContinue} />
+        <WelcomeVideoPlayer
+          videoPath={videoPath}
+          posterUri={posterUri}
+          height={screenHeight}
+          onEnded={forceShowContinue}
+        />
       ) : (
-        <View style={styles.fallback}>
+        <View style={[styles.fallback, { height: screenHeight }]}>
           <Text style={styles.fallbackEmoji}>🧑‍🏫</Text>
         </View>
       )}
 
       {videoDone ? (
-        <Animated.View entering={FadeIn.duration(300)} style={[styles.buttonWrap, { bottom: vs(16) + insets.bottom }]}>
+        <Animated.View
+          entering={FadeIn.duration(300)}
+          style={[styles.buttonWrap, { paddingTop: vs(28), paddingBottom: vs(16) + insets.bottom }]}
+        >
           <TouchableOpacity
             style={styles.button}
             onPress={() => router.replace('/onboarding/questionnaire' as never)}
@@ -196,14 +233,19 @@ export default function WelcomeScreen() {
             <Text style={styles.buttonText}>Continue To Questionnaire</Text>
           </TouchableOpacity>
         </Animated.View>
-      ) : (
-        <View style={[styles.waitingSpacer, { bottom: vs(16) + insets.bottom }]} />
-      )}
-    </View>
+      ) : null}
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
+  scroll: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  scrollContent: {
+    backgroundColor: '#000',
+  },
   container: {
     flex: 1,
     backgroundColor: '#000',
@@ -239,13 +281,11 @@ const styles = StyleSheet.create({
     color: '#FFF',
   },
   waitingSpacer: {
-    position: 'absolute',
     height: vs(56),
   },
   buttonWrap: {
     width: '100%',
     paddingHorizontal: s(20),
-    position: 'absolute',
   },
   button: {
     backgroundColor: colors.primary,

@@ -18,7 +18,7 @@ interface DailyCompletionState {
    * Marks a step complete for today. Returns `true` only when the step was not
    * already completed (i.e. a genuinely new completion). Returns `false` for
    * no-op cases — missing routine or re-completing an already-done step — so
-   * callers can avoid re-awarding stars when a child re-watches finished tasks.
+   * callers can avoid re-awarding stars when a child re-watches finished activities.
    */
   markStepDone: (
     segment: 'morning' | 'evening',
