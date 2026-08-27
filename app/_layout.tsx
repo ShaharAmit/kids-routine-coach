@@ -74,7 +74,14 @@ export default function RootLayout() {
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') setSegment(getCurrentSegment());
     });
-    return () => sub.remove();
+    const segmentTimer = setInterval(() => {
+      setSegment(getCurrentSegment());
+    }, 60_000);
+
+    return () => {
+      sub.remove();
+      clearInterval(segmentTimer);
+    };
   }, []);
 
   // Show moon/sun with 1 second delay when entering routines tab

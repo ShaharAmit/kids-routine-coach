@@ -19,10 +19,13 @@ import { getOrBuildMergedCaptions, localPart2VideoPath } from '../services/twoPa
 import { getReadyMergedVideoPath, ensureMergedActivityVideo } from '../services/videoMerge';
 import { colors, fs, ms, s, vs } from '../theme';
 
+type DaySegment = 'morning' | 'evening';
+
 interface ActivityPlayerProps {
   activityStep: ActivityStep;
   childName: string;
   avatarId: string;
+  segment: DaySegment;
   stepNumber: number;
   totalSteps: number;
   showCaptions?: boolean;
@@ -227,6 +230,7 @@ export default function ActivityPlayer({
   activityStep,
   childName,
   avatarId,
+  segment,
   stepNumber,
   totalSteps,
   showCaptions = false,
@@ -355,13 +359,22 @@ export default function ActivityPlayer({
   }, []);
 
   const handleComplete = useCallback(() => {
+    if (!videoEnded || timerSecondsRemaining !== 0) return;
+
     if (activityIndex < normalizedSteps.length - 1) {
       setVideoEnded(false);
+      setTimerSecondsRemaining(null);
       setActivityIndex((prev) => prev + 1);
       return;
     }
     onComplete();
-  }, [activityIndex, normalizedSteps.length, onComplete]);
+  }, [
+    activityIndex,
+    normalizedSteps.length,
+    onComplete,
+    timerSecondsRemaining,
+    videoEnded,
+  ]);
 
   if (!activity) return null;
 
@@ -402,7 +415,14 @@ export default function ActivityPlayer({
       >
         {activity.emoji}
       </Text>
-      <Text style={[styles.activityLabel, { color: activity.color }]}>{activity.label}</Text>
+      <Text
+        style={[
+          styles.activityLabel,
+          segment === 'evening' && styles.activityLabelEvening,
+        ]}
+      >
+        {activity.label}
+      </Text>
 
       {/* Avatar video — one player, one file, created already pointed at that file */}
       {resolved && resolved.kind !== 'unavailable' ? (
@@ -437,22 +457,26 @@ export default function ActivityPlayer({
       )}
 
       {/* Personalized prompt text */}
-      <Text style={styles.promptText}>{activity.promptTemplate(childName)}</Text>
+      <Text style={[styles.promptText, segment === 'evening' && styles.promptTextEvening]}>
+        {activity.promptTemplate(childName)}
+      </Text>
 
       {/* Done / Next Mission Complete button */}
-      <TouchableOpacity
-        style={[styles.doneButton, { backgroundColor: activity.color }]}
-        onPress={handleComplete}
-        activeOpacity={0.85}
-      >
-        <Text style={styles.doneButtonText}>
-          {activityIndex < normalizedSteps.length - 1
-            ? '➡️ Next Activity'
-            : stepNumber === totalSteps
-              ? '🎉 All Done!'
-              : '✅ Mission Complete!'}
-        </Text>
-      </TouchableOpacity>
+      {videoEnded && timerSecondsRemaining === 0 ? (
+        <TouchableOpacity
+          style={[styles.doneButton, { backgroundColor: activity.color }]}
+          onPress={handleComplete}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.doneButtonText}>
+            {activityIndex < normalizedSteps.length - 1
+              ? '➡️ Next Activity'
+              : stepNumber === totalSteps
+                ? '🎉 All Done!'
+                : 'Complete Mission!'}
+          </Text>
+        </TouchableOpacity>
+      ) : null}
     </ScrollView>
   );
 }
@@ -500,6 +524,10 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     marginBottom: vs(20),
     textAlign: 'center',
+    color: '#1F4A52',
+  },
+  activityLabelEvening: {
+    color: colors.eveningTitle,
   },
   videoContainer: {
     borderRadius: ms(24),
@@ -574,11 +602,15 @@ const styles = StyleSheet.create({
   },
   promptText: {
     fontSize: fs(18),
-    color: '#333',
+    color: '#5E8A86',
+    fontWeight: '600',
     textAlign: 'center',
     lineHeight: fs(26),
     marginBottom: vs(32),
     paddingHorizontal: s(8),
+  },
+  promptTextEvening: {
+    color: colors.eveningSubtitle,
   },
   doneButton: {
     paddingVertical: vs(18),

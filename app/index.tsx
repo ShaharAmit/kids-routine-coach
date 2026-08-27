@@ -112,6 +112,9 @@ export default function HomeScreen() {
   const [assetsReady, setAssetsReady] = useState(false);
   const [trophyVisible, setTrophyVisible] = useState(false);
   const [showCaptions, setShowCaptions] = useState(false);
+  const [activityListHeight, setActivityListHeight] = useState(0);
+  const [activityContentHeight, setActivityContentHeight] = useState(0);
+  const [activityListHasScrolled, setActivityListHasScrolled] = useState(false);
   const [trophyShownThisSession, setTrophyShownThisSession] = useState<Record<'morning' | 'evening', boolean>>({
     morning: false,
     evening: false,
@@ -203,10 +206,14 @@ export default function HomeScreen() {
         });
       }
     });
+    const segmentTimer = setInterval(() => {
+      setSegment(getCurrentSegment());
+    }, 60_000);
 
     return () => {
       mounted = false;
       appStateSub.remove();
+      clearInterval(segmentTimer);
     };
   }, []);
 
@@ -216,6 +223,7 @@ export default function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       let mounted = true;
+      setActivityListHasScrolled(false);
 
       getChildProfile()
         .then((profile) => {
@@ -279,6 +287,12 @@ export default function HomeScreen() {
   }, [primaryRoutine, visibleStepIndexes]);
 
   const completedStepIds = segment === 'morning' ? completedMorningStepIds : completedEveningStepIds;
+
+  useEffect(() => {
+    setActivityListHasScrolled(false);
+    setActivityListHeight(0);
+    setActivityContentHeight(0);
+  }, [segment]);
 
   useEffect(() => {
     if (visibleStepIndexes.length === 0) {
@@ -404,11 +418,26 @@ export default function HomeScreen() {
     const newlyCompleted = await markStepDone(segment, currentStepId, visibleStepIndexes.length);
 
     // Star awarding now happens in the allScopedDone effect,
-    // so we don't award here anymore. Just mark the step done and switch back to activities view.
+    // so we don't award here anymore. Show the completion message immediately after the final
+    // step is persisted; the effect still handles the idempotent star award.
     if (newlyCompleted) {
+      const completesSegment =
+        visibleStepIds.length > 0 &&
+        visibleStepIds.every((stepId) => stepId === currentStepId || completedStepIds.has(stepId));
+      if (completesSegment) {
+        setTrophyVisible(true);
+      }
       setViewMode('activities');
     }
-  }, [primaryRoutine, visibleStepIndexes, markStepDone, segment, currentStepIndex]);
+  }, [
+    primaryRoutine,
+    visibleStepIndexes,
+    visibleStepIds,
+    completedStepIds,
+    markStepDone,
+    segment,
+    currentStepIndex,
+  ]);
 
 
   if ((loading || completionLoading) && !primaryRoutine) {
@@ -476,7 +505,14 @@ export default function HomeScreen() {
 
             <View style={styles.cardWrap}>
               <View style={[styles.card, !isEvening && styles.cardMorning]}>
-              <ScrollView contentContainerStyle={styles.activitiesList} showsVerticalScrollIndicator={false}>
+              <ScrollView
+                contentContainerStyle={styles.activitiesList}
+                showsVerticalScrollIndicator={false}
+                onLayout={(event) => setActivityListHeight(event.nativeEvent.layout.height)}
+                onContentSizeChange={(_, height) => setActivityContentHeight(height)}
+                onScrollBeginDrag={() => setActivityListHasScrolled(true)}
+                scrollEventThrottle={16}
+              >
                 {visibleStepIndexes.map((index, listIdx) => {
                   const step = primaryRoutine.activityStack[index] ?? [];
                   const metas = step.map((key) => ACTIVITIES[key]).filter(Boolean);
@@ -533,6 +569,11 @@ export default function HomeScreen() {
                   </View>
                 ) : null}
               </ScrollView>
+              {activityContentHeight > activityListHeight + 2 && !activityListHasScrolled ? (
+                <View pointerEvents="none" style={styles.activityScrollHint}>
+                  <Text style={styles.activityScrollHintText}>↓</Text>
+                </View>
+              ) : null}
             </View>
           </View>
           </SafeAreaView>
@@ -546,6 +587,7 @@ export default function HomeScreen() {
             activityStep={currentActivityStep}
             childName={primaryRoutine.childName || ''}
             avatarId={primaryRoutine.avatarId || 'becky'}
+            segment={segment}
             stepNumber={scopedPosition + 1}
             totalSteps={visibleStepIndexes.length}
             showCaptions={showCaptions}
@@ -729,6 +771,28 @@ const styles = StyleSheet.create({
     paddingHorizontal: s(14),
     paddingTop: vs(8),
     paddingBottom: vs(96),
+  },
+  activityScrollHint: {
+    position: 'absolute',
+    bottom: vs(12),
+    alignSelf: 'center',
+    width: s(40),
+    height: s(40),
+    borderRadius: ms(20),
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    shadowColor: colors.shadow,
+    shadowOpacity: 0.16,
+    shadowRadius: ms(6),
+    shadowOffset: { width: 0, height: vs(2) },
+    elevation: 4,
+  },
+  activityScrollHintText: {
+    marginTop: -vs(4),
+    color: '#1F4A52',
+    fontSize: fs(28),
+    fontWeight: '800',
   },
   activityCard: {
     backgroundColor: colors.white,
